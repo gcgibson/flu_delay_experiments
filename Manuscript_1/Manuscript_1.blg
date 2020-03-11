@@ -1,0 +1,52 @@
+This is BibTeX, Version 0.99d (TeX Live 2017)
+Capacity: max_strings=100000, hash_size=100000, hash_prime=85009
+The top-level auxiliary file: Manuscript_1.aux
+The style file: WileyNJD-AMA.bst
+Database file #1: bib.bib.bib
+Warning--empty author in cdc
+Warning--empty title in cdc
+Warning--empty journal in cdc
+Warning--empty author in sarimaTD
+Warning--empty journal in sarimaTD
+You've used 22 entries,
+            2054 wiz_defined-function locations,
+            646 strings with 8702 characters,
+and the built_in function-call counts, 3777 in all, are:
+= -- 339
+> -- 178
+< -- 0
++ -- 81
+- -- 59
+* -- 408
+:= -- 702
+add.period$ -- 22
+call.type$ -- 22
+change.case$ -- 0
+chr.to.int$ -- 0
+cite$ -- 27
+duplicate$ -- 194
+empty$ -- 356
+format.name$ -- 59
+if$ -- 836
+int.to.chr$ -- 0
+int.to.str$ -- 22
+missing$ -- 21
+newline$ -- 69
+num.names$ -- 19
+pop$ -- 51
+preamble$ -- 1
+purify$ -- 0
+quote$ -- 0
+skip$ -- 24
+stack$ -- 0
+substring$ -- 0
+swap$ -- 20
+text.length$ -- 0
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 0
+warning$ -- 5
+while$ -- 19
+width$ -- 24
+write$ -- 219
+(There were 5 warnings)

@@ -1,0 +1,1716 @@
+---
+title: Improving influenza forecasts by accounting for reporting revisions
+author:
+- name: Graham C. Gibson*
+  num: a,b
+- name: Evan L. Ray
+  num: a
+- name: Tom McAndrew
+  num: a
+- name: Dave Osthus
+  num: b
+- name: Nicholas G. Reich
+  num: a
+address:
+- num: a
+  org: University of Massachusetts, Amherst
+- num: b
+  org: Los Alamos National Laboratory
+
+corres: "Graham C Gibson, \\email{gcgibson@umass.edu}"
+
+authormark: Gibson \emph{et al.}.
+articletype: Research article
+received: 2017-01-01
+revised: 2017-02-01
+accepted: 2017-03-01
+abstract: "With an estimated $10.4 billion in medical costs and 31.4 million outpatient visits each year, influenza poses a serious burden of disease in the United States. To provide insights and advance warning into the spread of influenza, the U.S. Centers for Disease Control and Prevention (CDC) has run a challenge for forecasting influenza-like-illness (ILI) and weighted influenza-like-illness (wILI) at the national, regional, and state level. Targets of interest include 1-4 week ahead wILI percentages, as well as seasonal targets such as peak week of incidence, peak week percentage, and season onset. However, because the challenge requires forecasts in real-time, the data used to forecast are subject to revisions. Almost all initial reports of wILI or ILI at a given time are revised later on. Initial reports of wILI (ILI) can be revised either upwards or downwards as additional data from reporting facilities are processed. In order to accurately forecast wILI (ILI) percentages, accounting for these revisions is critical. We present a framework that relies solely on historical revisions which shows improvements in average log score of seasonal and 1-4 step ahead targets at the national, regional, and state level."
+bibliography: bib.bib
+output: rticles::sim_article
+
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{algorithmicx}
+  - \usepackage{bbm}
+  - \usepackage{amssymb}
+  - \usepackage{graphicx}
+
+---
+
+# Introduction
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(fig.pos = 'H')
+
+knitr::opts_chunk$set(cache=TRUE)
+knitr::opts_chunk$set(echo = TRUE, fig.align="center")
+source('../utils.R')
+year_week_to_season_week <- function(
+  year_week,
+  year) {
+  season_week <- ifelse(
+    year_week <= 30,
+    year_week + MMWRweek::MMWRweek(MMWRweek:::start_date(year) - 1)$MMWRweek - 30,
+    year_week - 30
+  )
+  
+  return(season_week)
+}
+data <- readRDS("../data/flu_data_with_backfill.rds")
+result_df_season_onset<- readRDS("../result_objects/season_onset_result_df")
+result_df_peak_week_percentage <- readRDS("../result_objects/peak_week_percentage_result_df")
+result_df_peak_week <- readRDS("../result_objects/peak_week_result_df")
+result_df_wk_ahead <- readRDS("../result_objects/wk_ahead_result_df")
+result_df_wk_ahead_2 <- readRDS("../result_objects/wk_ahead_2_result_df")
+result_df_wk_ahead_3 <- readRDS("../result_objects/wk_ahead_3_result_df")
+result_df_wk_ahead_4 <- readRDS("../result_objects/wk_ahead_4_result_df")
+
+result_df <- rbind(result_df_season_onset,result_df_peak_week_percentage,result_df_peak_week,result_df_wk_ahead,result_df_wk_ahead_2,result_df_wk_ahead_3,result_df_wk_ahead_4)
+
+result_df$target <- c(rep("Season onset",nrow(result_df_season_onset)),
+                      rep("Peak Week Percentage",nrow(result_df_peak_week_percentage)),
+                      rep("Peak Week",nrow(result_df_peak_week)),
+                      rep("1 Wk Ahead",nrow(result_df_wk_ahead)),
+                      rep("2 Wk Ahead",nrow(result_df_wk_ahead)),
+                      rep("3 Wk Ahead",nrow(result_df_wk_ahead)),
+                      rep("4 Wk Ahead",nrow(result_df_wk_ahead))
+                      )
+
+levels(result_df$region) <- c("HHS 1", "HHS 10" ,paste0("HHS ",2:9),"National")
+
+
+```
+
+## Importance of Influenza Forecasting
+
+Seasonal influenza hospitalizes over half a million people in the world every year[@lafond2016global].
+The United States alone reported approximately 80,000 Influenza related mortalities in the 2017/2018 influenza season, with most serious consequences for vulnerable populations such as children or the elderly. The annual toll of influenza outbreaks in the US provide a frequent reminder of the importance of interventions that could help mitigate the impact of influenza outbreaks.[@skowronski2018early]
+
+
+The main tool in the fight against influenza is vaccination. The CDC recommends that everyone, including children, get vaccinated at the beginning of the season. However, there are only a finite number of vaccines produced each season, begging the question of how to best allocate the limited number of vaccines to protect the largest number of at risk people. Studies have shown that an optimal allocation of influenza vaccine requires an accurate estimate of risk to the population. [@mylius2008optimal] To this end, accurate probabilistic forecasting models may help with optimal risk assessment and therefore optimal allocation. 
+
+
+As part of their forecasting initiative, the CDC releases forecasts for weighted influenza-like illness (wILI), which measures the proportion of outpatient doctor visits at reporting health care facilities where the patient had influenza-like illness, weighted by state population. Forecasts are made for up to four weeks into the future, as well as seasonal targets including week of peak incidence, peak week wILI value and season onset. Participants in the FluSight challenge have harnessed a variety of models and methods to forecast the targets under consideration. These efforts have included time series models, mechanistic transmission models, and machine learning techniques.[@kandula2018evaluation] Five teams submitted forecasts from seven models in the 2017/2018 season.[@biggerstaff2018results] Some teams have also incorporated external data to improve forecasts.[@dugas2013Influenza][@araz2014using][@volkova2017forecasting]
+
+
+However, many submitted models fall prey to reporting revisions. Each week, the CDC releases updated data that include an initial report of wILI for a particular week as well as revisions to previously reported wILI. These revisions occur for a variety of reasons, and initial reports of wILI may be revised upwards or downwards. For example, initial reports of wILI may be revised upwards if additional cases of ILI are reported or revised downwards if additional outpatient doctor visits without ILI are reported. These revisions have consequences for forecast accuracy since the way the CDC assesses model performance by evaluating forecasts generated using unrevised data are able to predict the revised final data at the end of the season.[@reich2019collaborative] Revisions may occur up to 10 weeks after the final week of the season, after which the CDC fixes the observed data at that time as the "truth", for purposes of scoring models. Accounting for revisions in real-time may improve log-score on CDC defined targets by recognizing patterns in historical revisions and applying them to currently reported data. 
+
+Methods for accounting for reporting revisions have commonly been referred to as "nowcasting" in the literature. This is because we are providing an estimate of a desired signal at the current time (commonly called time "now") based on a partially observed signal.[@lawless1994adjustments] [@lampos][@johansson2014nowcasting] Early attempts at correcting for reporting revisions focused solely on the under-reporting aspect. [@kalbfleisch1989inference] The work of Lawless et al. used a non-parametric method to scale up observed incidence levels of human immunodeficiency virus (HIV) based on historical revisions in order to gain a more accurate estimate of the emerging HIV epidemic. Hohle extended this effort to account for arbitrary transmission models in an under-reported setting during a Shiga toxin-producing E. coli epidemic. [@hohle2014bayesian] Recently, Nunes et al. employed a hidden Markov model to estimate the reporting revisions to wILI data from Portugal with success. [@nunes2013nowcasting] Stone et al. also investigated the application of state space models to the reporting delay problem with count data in a hierarchical setting.[@stoner2019multivariate]
+
+With respect to influenza-like-illness in the U.S., much of the current efforts are focused on using external data to improve the estimates of the unrevised data. External data show significant improvements to 1-4 week ahead forecasts but not to seasonal forecasts.[@osthus2019even] Reporting delay has previously been modeled without using external data at the national level with mixed results for the 1-4 step ahead targets. [@brooks2018nonmechanistic] We propose a framework that lends itself to modeling delay at both the national and state level and suggest models that improve both seasonal and short term forecast log scores at both the national and state level.
+
+
+
+# Data & Forecast Targets
+
+
+
+## U.S. Influenza Surveillance Data
+
+For the national challenge, the CDC wILI data are provided at both the national level and broken down into 10 Health and Human Services (HHS) regions, mostly organized by geographical proximity. The national level data extend from 1997 to the present and the HHS regional data are available starting from 2013. The revised wILI data are highly seasonal and vary by region (Figure \ref{fig:data-overview}A). For the state level challenge, only data from 2016 to the present is available. Data is reported for each state at the ILI level, except for Florida, which does not participate. 
+
+These data are reported by the ILINet system, a consortium of over 3,500 outpatient healthcare facilities across all states and territories in the US. Each week, around 2,200 of these providers report both total number of patient visits and total number of patients presenting with influenza-like symptoms. These two numbers are combined to report the percentage of cases reporting with influenza-like symptoms and are weighted by population size of the state to generate the final regional or national wILI level. [@cdc_flusight]
+
+The CDC releases updated wILI data on a weekly basis for all states and regions. These updates include new wILI estimates for the most recent week, in addition to revisions for all prior weeks of the season. As noted above, revisions can be made either upwards or downwards due to updates to both the total number of visits and total of number of ILI visits. An example of historical revisions is shown in Figure \ref{fig:data-overview}B). Revision data extends back to 1997 for the national level data, but only includes the 2017/2018 season for state level data. 
+
+
+
+## Targets
+
+The CDC FluSight challenge identifies three key seasonal targets of interest: season onset, season peak week percentage, and season peak week. Season onset is defined as the first week of the season which exceeds a pre-specified baseline for at least 3 consecutive weeks. That is, the week at which we have observed three wILI  values above a set baseline in a row. This is helpful for public health officials in their preparation and planning for the upcoming season. This target is restricted to national and regional level data, where such baselines are defined. This definition makes season onset particularly susceptible to reporting revisions. Revising the wILI just slightly can flip the wILI value above or below the pre-specified season onset, and therefore change the identified season onset week. Season peak week percentage is defined as the maximum wILI or ILI value observed for the season. This target is also sensitive to reporting revisions if a season peak percentage value that has been observed is revised downwards. This is because forecasting models can only place probability of a season peak percentage larger than the observed peak percentage. Finally, season peak week is defined as the week in which the maximum observed wILI value occurs. This target is less sensitive to reporting revisions since revisions usually respect the relative ordering of wILI or ILI values within a season. This is also in part because of the relatively consistent direction of reporting revisions throughout a season.  
+  In addition to seasonal targets the CDC is interested in 1-4 week ahead forecasts for short term projections of ILI. These are helpful for real-time public health decision making and resource allocation. In practice, the data is delivered with a two week lag, so the 1 step head forecast is actually a "hindcast", the 2 step ahead forecast is a "nowcast", and the 3-4 step ahead forecast is a true forecast. 
+
+
+## Notation
+
+Due to the complicated nature of reporting revisions, we first introduce notation to describe the data that is available at given time and the final data used to score the models. 
+
+We begin by examining the traditional forecasting models used to create predictive distributions of the form:
+\begin{equation}
+  f(z_{w} | y_1,...,y_w,\theta) 
+\end{equation}
+for some observed data $y_1,...,y_w$ and parameters $\theta$. For example, $y_w$ may be a measure of disease incidence at epiweek $w$. We use $Z_{w}$ to indicate an arbitrary forecast target relative to time $w$. For example, $Z_{w} =  Y_{w+1}$ would be a 1-step ahead prediction and $Z_{w} = argmax_{ \ w \ \in  \ S}(Y_1,...,Y_w)$ would be a season peak target for some season $S$. 
+
+In order to capture the inherent variability of the observed data due to revisions, we instead consider $(Y_1,...,Y_w)$ as random, not fixed. We denote the revised wILI (or ILI) for epiweek $w$ at time $w+l$ as $Y_{w,l}$. Borrowing from the notation of H&ouml;hle [@hohle2014bayesian] denote the final reported data as $Y_{w,\infty}$ where $l=\infty$ denotes the revision at time $\infty$, that is, the final revision. We also notate the most up to date set of data for a given season $s$ in a given region $r$ at epiweek $w$ as 
+
+\begin{equation}
+\vec{Y}_{w,l}  = \{Y_{1,w},Y_{2,w-1},...,Y_{w,0}\}
+\end{equation}
+
+and similarly we define the vector of initially reported data and finally reported data as follows:
+
+\begin{equation}
+\vec{Y}_{w,0}  = \{Y_{1,0},Y_{2,0},...,Y_{w,0}\}
+\end{equation}
+
+
+\begin{equation}
+\vec{Y}_{w,\infty}  = \{Y_{1,\infty},Y_{2,\infty},...,Y_{w,\infty}\}
+\end{equation}
+
+This notation is further illustrated in Figure \ref{fig:notation_and_g}B.
+
+With the data notation established, we can now consider a joint distribution over the finally reported data and the forecast target, conditional on the currently reported data, thereby treating the observed data as random. 
+
+\begin{equation}
+f(z_{t,\infty} , y_{1,\infty},y_{2,\infty}...,y_{t,\infty}|\theta,y_{1,t},y_{2,t-1},...,y_{t,0})
+\end{equation}
+
+To simplify notation, we condense the set of observed data for a given week $w$ as $\vec{Y}_{w,l}$ (Figure \ref{fig:notation_and_g}). In order to leverage existing process models that historically yield well calibrated forecast distributions, we factor the above distribution into a forecast distribution conditional on some observed data, and an "observed data distribution" that captures our uncertainty over the currently reported data. 
+
+\begin{equation}
+f(z_{w,\infty} | y_{1,\infty},...,y_{w,\infty} |\theta ) g(y_{1,\infty},...,y_{w,\infty} | \phi, \vec{y}_{w,l})
+\end{equation}
+
+
+
+This factorization also allows us to recover our real goal when forecasting, the marginal distribution over the target $Z_{w,\infty}$:
+
+\begin{equation}
+\tilde{f}(z_{w,\infty} )=\int f(z_{w,\infty} | \vec{y}_{w,\infty},\theta) g( \vec{y}_{w,\infty} | \vec{y}_{w,l} ,\phi) \ dy_1,..,y_w
+\end{equation}
+
+In cases where the distribution of $Y_1,...,Y_w$ does not have a pdf $g$, this integral can be written in terms of the cdf $G_{Y_1, \ldots, Y_w}$ using a Stieltjes integral:
+
+\begin{equation}
+\tilde{f}(z_{w,\infty} )= \int f(z_{w,\infty} |  \vec{y}_{w,\infty},\theta) \ d G_{ \vec{Y}_{w,\infty}}( \vec{y}_{w,\infty}|\phi,\vec{y}_{w,l})
+\end{equation}
+
+
+This integral will often be intractable, especially in a generic setting where we allow arbitrary process model and observed data distributions. In practice, we will approximate it using Monte Carlo techniques. 
+
+\begin{equation}
+\tilde{f}(z_{w,\infty} )\approx \frac{1}{n}\sum_{i}^{n} f(z_{w,\infty} |  \vec{y}_{w,\infty}, \theta ) 
+\end{equation}
+
+where $$ \vec{y}_{w,\infty} \sim  G|\vec{Y}_{w,l},\phi$$. With the general framework established, we turn our attention to specific models for $g$, designed to remedy the reporting revision challenges described above. 
+
+
+# Models for the available data 
+
+In what follows we develop two separate models for the available data based on the two types of targets found in the challenge, seasonal and short term. This is motivated by the separate challenges reporting revisions present to each target. We first examine the effects of reporting revisions on seasonal targets followed by the effects of reporting revisions on 1-4 step ahead targets. 
+
+
+## Reporting Revision Effects on Seasonal Targets
+
+  Season onset requires three or more wILI values to be above the region specific season onset baseline. This definition makes the target very sensitive to reporting revisions. As noted in Figure \ref{fig:season-target-explanation}, the season onset can be revised below the baseline, moving the truth more than 1 week away from the currently reported season onset. This results in a log score of negative infinity when predicting season onset after it has been initially observed, since the model places all probability on the available data season onset. Historically, this has occurred in around 10% of seasons across all regions. However, for each season this occurs in, a score of negative infinity is assigned multiple times, since the season onset target is evaluated for all weeks in a season, and only when the versions move the available data to the correct side of the season onset baseline does the model predict season onset correctly. 
+  A similar story happens in the peak week percentage. The peak week percentage is calculated by sampling process model trajectories forward in time and choosing the max over the sampled trajectories. Only sampled trajectories that exceed the currently observed peak will be included in the predictive distribution. Therefore, only peak week percentages larger than the currently observed peak percentage receive non-zero probability. If the peak week percentage is revised downwards this also results in a negative infinity log score. Historically, this has occurred in over half the seasons across all regions. 
+  Peak week, however, does not suffer from a similar problem as the other two targets defined above. This is again because the reporting revisions usually respect the relative ordering of wILI (or ILI) values throughout a season. Therefore, even though the season maximum may be revised, the week at which the maximum occurs is relatively stable. In fact, historically reporting revisions have only shifted the week at which the maximum occurs twice, across all regions. 
+
+
+```{r,echo=FALSE}
+region_map <- function(r){
+  if (r == "nat"){
+    return("National")
+  } else if (r == "hhs1"){
+    return("HHS 1")
+  } else if (r == "hhs2"){
+    return("HHS 2")
+  } else if (r == "hhs3"){
+    return("HHS 3")
+  } else if (r == "hhs4"){
+    return("HHS 4")
+  } else if (r == "hhs5"){
+    return("HHS 5")
+  } else if (r == "hhs6"){
+    return("HHS 6")
+  } else if (r == "hhs7"){
+    return("HHS 7")
+  } else if (r == "hhs8"){
+    return("HHS 8")
+  } else if (r == "hhs9"){
+    return("HHS 9")
+  } else if (r == "hhs10"){
+    return("HHS 10")
+  } 
+}
+data <- readRDS("../data/flu_data_with_backfill.rds")
+data$season <- unlist(lapply(data$epiweek,function(x){
+  if (as.integer(substr(x[1],5,6) )>= 30){
+    return (substr(x[1],1,4))
+  } else{
+    return (as.integer(substr(x[1],1,4))-1)
+  }
+}))
+
+
+```
+
+
+
+These observations highlight the need for uncertainty around the available data. Our model for $g$ must take into account the possibility of future revisions that alter that season targets. In order to add uncertainty to the observed data we non-parametrically sample from historical revisions using the revision difference we call d. More specifically, at a given region $r$, season $s$, week $w$, and lag $l$ as a central concept in our model. We denote the difference between the reported wILI at lag l and the final wILI value by 
+\begin{equation}
+d_{r,s,w,l} = Y_{r,s,w,l} - Y_{r,s,w,\infty}
+\end{equation}
+
+
+\begin{equation}
+g(\vec{y}_{r,s,w,\infty} ; \vec{y}_{r,s,w,l},\vec{d}_{w,l}) = \frac{1}{n}\sum_{i=1}^n \delta\left(\vec{y}_{r,s,w,l} - \vec{d}^{(i)}_{r,s,w,l} \right)
+\end{equation}
+
+
+Sampling from $g$ amounts to drawing $\vec{d}^{(i)}_{r,s,w,l}$ from historical reporting revisions and then subtracting the sampled revision from the observed data $\vec{Y}_{r,s,w,l}$. This allows us to create a non-parametric distribution around the observed data by borrowing information from historical reporting revisions. 
+
+We can see how this modifies the expected value of a forecast by using the law of total expectation.
+
+
+\begin{align*}
+E_{\tilde f}(Z_{r,s,w,\infty}) =  \int_{\vec{Y}_{r,s,w,\infty}}E_f(Z_{r,s,w,\infty} |\vec{y}_{r,s,w,\infty})) dG_{\vec{Y}_{r,s,w,\infty}}\\
+E_{\tilde f}(Z_{r,s,w,\infty}) =  \int_{\vec{Y}_{r,s,w,\infty}}\frac{1}{n}\sum_{i=1}^n E_f(Z_{r,s,w,\infty} |\vec{y}_{r,s,w,l}-{\vec{d}^{(i)}_{r,s,w,l}}))  dG_{\vec{Y}_{r,s,w,\infty}}\\
+E_{\tilde f}(Z_{r,s,w,\infty}) = \frac{1}{n}\sum_{i=1}^n E_f(Z_{r,s,w,\infty} |\vec{y}_{w,l}-\vec{d}^{(i)}_{w,l}))  \int_{\vec{Y}_{w,\infty}} dG_{\vec{Y}_{r,s,w,\infty}}\\
+E_{\tilde f}(Z_{r,s,w,\infty}) = \frac{1}{n}\sum_{i=1}^n E_f(Z_{r,s,w,\infty} |\vec{y}_{r,s,w,l}- \vec{d}^{(i)}_{r,s,w,l})) 
+\end{align*}
+
+The expected value of the sampling method is the average over the forecasts from the sampled revisions.
+
+We can also examine the variance of the resulting altered forecast distribution using equation 8. The first term is a weighted sum of the forecast distribution variance weighted by the probability of the observed data. 
+
+\begin{equation}
+E_g[Var_f(Z_{r,s,w,\infty}|\vec{y}_{r,s,w,\infty})] = \int_{\vec{Y}_{r,s,w,\infty}} Var_f(Z_{r,s,w,\infty} |\vec{y}_{r,s,w,\infty}) dG_{\vec{Y}_{r,s,w,\infty}}
+\end{equation}
+
+\begin{equation}
+=\frac{1}{n} \sum_{i=1}^nVar_f(Z_{r,s,w,\infty} |\vec{Y}_{r,s,w,l}-\vec{d}^{(i)}_{r,s,w,l})
+\end{equation}
+
+
+The second term in equation. 8 is a variance with respect to the observed data distribution.
+
+\begin{equation}
+Var_g(E_f(Z_{r,s,w,\infty}|\vec{Y}_{r,s,w,l}-\vec{d}^{(i)}_{r,s,w,l}))
+\end{equation}
+
+which will generally be positive unless $g$ is a point-mass around the observed data. In our particular choice of $g$, this term is clearly positive, demonstrating where the additional variation around the observed data comes from. 
+
+
+
+## Effects of reporting revisions on 1-4 step ahead forecasts
+
+While adding uncertainty around the observed data may protect against seasonal target revisions, it creates a problem for short term forecasts. As demonstrated, the above model for $g$ increases the variance of the forecasts. This is a desirable property for seasonal targets, but not for short term targets. This is because process models have been developed to have well calibrated predictive distributions for short term targets, and inflating the variance will decrease the amount of probability placed on the true target value. Therefore, in order to correct for the effect of reporting revisions on short term targets, we focus on modelling the bias induced by reporting revisions, while maintaining the well calibrated predictive distributions under the process model of choice.
+  To directly model the bias we again model the difference between the available wILI (or ILI) and the final wILI (or ILI). We allow the reporting revision bias to vary with time in season. This is because we assume a greater difference in the available and final wILI (or ILI) during the peak of the season, when activity is highest.  We also make use of the how many ILINet health care providers have submitted information. This can be thought of as a mechanistic indicator of reporting revisions. If only a small number of the total health care providers have submitted their information, there is a high likelihood of revision. Unfortunately, we do not currently have access to the total number of health care providers and instead use the un-normalized number of providers. This allows us to model the bias in the reporting delay as follows: 
+
+$$\begin{gathered}
+\textbf{E}[Y_{w,0,r} - Y_{w,\infty,r}] = \beta_{0} + \beta_{1}\text{spline(season week)} + \beta_2\text{num providers}+ \\   b_{1,r}\text{spline(season week)} + b_{0,r}\text{num providers}   \\
+ b_0,b_1 \sim MVN(0,\Sigma)
+\end{gathered}$$
+
+where we have introduced the subscript $r$ to indicate region. We use a spline in the season week to allow for a greater impact of reporting delay at higher levels of incidence (near the peak week) than at the beginning and end of the season. This hierarchical model allows us to both borrow information about the bias of the reporting delay across regions (states) but also allow the effect of the season week and number of providers to vary by region (states). This is desirable because the total number of providers varies by state along with the effect of season week. This could be because different states have different reporting protocols and disparate effects of high wILI (ILI) on reporting infrastructure burden.  
+
+
+In order to predict and correct for the bias we construct a series of regression models, fit independently, for each value of the lag. Thus, if we are in epiweek 50, we use the estimates from 10 independent regression models to correct the bias for all weeks from the start of the season to the current week. If we notate the collection of predicted corrections as $d_{t,l}$ We then correct the bias as follows
+
+
+\begin{equation}
+\hat{Y}_{w,\infty} = Y_{w,l} - d_{w,l}
+\end{equation}
+
+
+ We can treat this model in our framework as a point density $g$ that takes the available data and maps it to the bias corrected data. That is,
+
+$$g(Y_{w,\infty} = y_{w,\infty}) =  \begin{cases}
+                  1 \ \text{ if } \ y_{w,\infty} = \ y_{w,l} -d_{w,l}\\
+                  0 \ \text{ otherwise}
+                  \end{cases}
+                $$
+                
+                
+Using the law of total variance we can see that we not change the forecast variance, since the variance under $g$ is 0, and the expected value is simply 
+
+$$E_g(Var(Z_{w,\infty} | Y_{w,l})) = Var(Z_{w,\infty} | Y_{w,l}-{d_{w,l}})$$
+
+
+
+
+
+# Evaluation
+## Model Scoring
+
+In order to score the probabilistic forecasts made by SARIMATD under each of the revision models we employ the multibin log score used by the CDC in the FluSight challenge. In order to score forecasts produced by models we discretize the continuous predictive distributions for each target by binning values. If we index each of the predictive distributions for target $Z_t$ at week $w$ for bin $i$ by region $r$ and season $s$   we obtain a discrete distribution of the form,
+
+$$p_{r,s,w,Z_t,i} = P_{r,s,w}(Z_{t} =i)$$
+
+For example, if $Z_t = \text{1 Wk Ahead}$ then $i = \{0,.1,.2,....,13,13+\}$ and if $Z_t = \text{Season Onset}$ then $i=\{1,...,52\}$. We therefore have that $\sum_i p_{r,s,w,Z_t,i} = 1$. We compute the log score of a forecast as the log of the probability assigned to the observed outcome In order to avoid $-\infty$ when the probability assigned to the target is $0$ we truncate at -10, following convention set by the CDC. 
+
+\begin{equation}
+\text{log score}_{r,s,w,Z_t} = max(-10,log( p_{r,s,w,Z_t,i}))
+\end{equation}
+
+
+We can extend this to multibin scoring by expanding the set of values that are considered correct (the true wILI), from a point i to a set $I$. 
+
+\begin{equation}
+\text{mutlibin log score}_{r,s,w,Z_t} = log(\sum_{i \in I} max(-10,p_{r,s,w,Z_t,i}))
+\end{equation}
+
+ For example, under the multibin scoring, the season onset truth set is $\{i-1,i,i+1\}$ and for 1-4 week ahead the truth set is $\{i-.5,i+.5\}$.
+
+Table 1 explains exactly what data are used when making a forecast for a particular target during the testing phase.
+## Experimental setup
+
+### National & Region Level
+
+In order to compare forecasts made from the available data to those made by our revision models and the revised data, we train a SARIMATD model on final reported wILI data ($Y_{r,s,w,\infty}$) from 2010/2011 to 2014/2015. We reserve 2015/2016, 2016/2017, and 2017/2018 as test seasons. We fit the model to each region separately. 
+  Along with model fitting, we also use the data from 2010/2011 through 2015/2016 to estimate the reporting revision differences. Although we do not explicitly evaluate the estimation of the reporting revision differences, the reporting revision estimation performance is tied into the log score of the wILI target forecast. This is because our end goal is improvement in forecasts. 
+
+ 
+
+### State Level
+
+We use the same process model and evaluation scheme as the national level. However, we are limited to only three seasons of data for the state level ILI, and only two seasons where the reporting delay was monitored. Therefore, we use $2016/2017$ and $2017/2018$ to fit both the process model and delay models, and use only $2018/2019$ as a test season.
+
+
+
+# Results
+
+
+
+The results for the both national/regional and state levels are shown in Tables 1 & 2. 
+
+## Sampling method can improve forecast accuracy for seasonal targets
+
+ Using the sampling method we are able to avoid the extreme cases (-10 log score) since we do not treat the available data as fixed. As noted above, the sampling method is able to correct the misidentified season onset by placing some probability on the event that the current observed season onset will be revised. Similarly, the sampling method assigns some probability to the event that the currently reported peak percentage may be revised downwards. In fact, this benefit of the sampling method is model agnostic, since all models that don't explicitly account for revisions would treat a currently observed season onset as the truth, without accounting for some uncertainty in the reported data. Therefore, the season onset specific results should extend to all other process models. A specific example of the benefits of the sampling method is illustrated in Figure \ref{fig:season-target-explanation}, where the -10 values all appear later in the season, when the season onset has been observed. The sampling method removes these -10s, regardless of prospective forecast score by simply placing probability on wILI values below the currently observed season onset. We see a similar effect on season peak percentage. As noted above, we see little benefit to the peak week target, since revisions usually respect the relative ordering of wILI (or ILI) 
+
+
+
+## The bias correction method is able to improve the MSE of our estimate of the true data
+
+As we can see from Table 1 & 2 we are able to get closer to the final reported data (in terms of MSE) using our bias correction method. This means the data that we pass into SARIMA to forecast from is closer to the finally reported data that will be used to score the model at the end of the season. This clearly is a desirable attribute of any bias correction model, but still leaves the link between reduction in MSE of available data and log-score of forecasts to be examined. Note that the results of the DM test are relatively uninformative because of the small sample size (only 1 test season). 
+
+## The bias correction method is able to improve 1-4 step ahead log scores on average
+
+As expected, we see the biggest gain in log score for 1 step ahead forecasts. This is because the 1 step ahead forecast is most sensitive to corrections in the recent data under the SARIMA process model. By 4 steps ahead our forecasts have become sufficiently spread out that correcting for the bias has little effect. These results may vary under the chosen process model. For instance, for a seasonal historical average model that ignores the current season data, the revision process will have no effect on forecasts, and therefore correcting it will have no effect on forecasts. However, most models in the FluSight competition do make use of recent data. As seen in Tables 1 & 2, the log-score increases are quite small, as reflected in the Diebold-Mariano p-values. They are, however, consistently better, which in the realm of influenza forecasting is enough to warrant discussion. We also computed the p-values for the test of significance between forecasts made from the available data and forecasts made from the revised data. For 1-4 step ahead targets, these were all >.05. Therefore, it is not clear that either modelling 1-4 step ahead forecasts will lead to statistically significant improvement in log score of forecasts or that the DM test is suitable to detect such small differences. Further investigation into potential uses of internet search data or bio-sensor data may improve the bias correction models. 
+
+## The results vary heavily by region
+
+The bias correction method requires that the direction of the revisions (either over or under reported) is consistent across seasons. If we examine Figure \ref{fig:sld}, we can see that stats such as Arizona (az) are both under and over reported, violating the consistency assumption. It may be beneficial to consider an average level of bias significantly different from 0 before applying revision correction. At the national level, reporting revisions are relatively minor and inconsistent in their direction, and therefore correcting for the bias actually increases the MSE of the adjusted data as an estimate of the final data. This loss in MSE is offset by hhs regions with a larger level of reporting revisions, but further investigation into indicators of the amount of revision per region may help identify those regions which do not need reporting revision modelling.    
+
+
+
+
+# Conclusion
+
+We have presented a general framework to account for reporting revisions in a statistically principled way. By treating the observed data as random we are able to introduce uncertainty to capture the effect of reporting revisions. By sampling historical reporting revision differences and applying them to the currently observed data we have protected against the scenarios where revisions cause large negative effects on log score for seasonal targets. By building well informed reporting delay bias correction models, we are able to improve the 1-4 step ahead log score of forecasts and the MSE of the available data as an estimate of the final data. 
+
+Although we chose a canonical process model to forecast wILI (SARIMA), the main benefit of treating the observed data as random occurs when an initial season onset has already been observed, or an unrevised season peak percentage above the revised peak percentage has already been observed. In this way, the benefits offered by our approach are irrespective of the choice of process model. Their effect does not rely upon any process model forecast values, but is simply based on imparting uncertainty into the currently observed data. 
+
+Lack of data for proper cross-validation of our methods is a significant limiting factor of the above analysis. While the benefits of the sampling method are grounded in specific reporting revision scenarios, the probability of those scenarios remains low. It could be that the reporting process of the ILINet network is improving over time, meaning the chance of an extreme reporting revision situation is continually decreasing. A larger set of training and testing seasons to analyze would help address this question. The lack of data also impacts the ability to detect statistical significance in the small improvements made by the bias correction model.  
+
+Further investigation into an ensemble approach combining external data sources with historical reporting revision differences may yield even more benefit during forecasting. Research seems to suggest that an external signal may help improve nowcasting, so combining this with historical revisions may outperform either model on their own. Nevertheless, this requires access to external data that shows strong correlation with the wILI signal and is itself not prone to reporting revisions. In many infectious disease settings, this data does not exist. There is also room for improvement of the bias modelling by using covariates that mechanistically drive reporting delay, such as the number of providers that have reported out of total number of providers.  
+
+Even after accounting for reporting revisions, accurate forecasting of wILI remains a difficult task. The complex transmission dynamics and limited data availability mean the main source of forecast error is simply the underlying model, not the reporting revisions. In addition, wILI is not a perfect signal of the true level of influenza in the population. [@reich2019collaborative] However, wILI forecasts still have an actionable value for public health officials. Effective risk assessment is crucial in vaccine allocation, and well calibrated forecasts are helpful to that end. 
+
+
+
+
+
+# Figures
+
+```{r table-regional-results, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+require(pander)
+panderOptions('table.split.table', Inf)
+set.caption("National/Regional results for 2015/2016,2016/2017,2017/2018 season averaged over all regions. Seasonal target log-scores are evaluated under the non-parametric sampling method described in section 3.1. Short term forecast target log-scores are evaluted under the bias correction method described in section 3.2. MSE of both the available data and the adjusted data under the bias correction method as an estimate of the final data is reported. Diebold-Mariano tests of forecasts made from the available data versus the adjusted data under each model are reported. ")
+my.data <- " Method | SO | PWP | PW | MSE | 1 | 2 | 3 | 4
+  Available   | -0.9943556 | -2.571994 | -1.314099 |  0.1435912 |-0.8863175 |-1.18068 | -1.430448 | -1.601377
+  Adjusted  |  -0.7947232 |  -2.399926 | -1.330966 |0.1338544 |-0.8675318 |  -1.179483 |-1.428977| -1.610428
+  Perfect  |  -0.5784056 | -1.967124 | -1.226389 | 0 | -0.7958849 |  -1.138517 | -1.393963 | -1.585776 
+ DM p-value | 0.02761 |3.848e-12 | 2.2e-16 | 0.002415 |  0.1412 | 0.4033 | 0.3592 | .6128 "
+df <- read.delim(textConnection(my.data),header=FALSE,sep="|",strip.white=TRUE,stringsAsFactors=FALSE)
+names(df) <- unname(as.list(df[1,])) # put headers on
+df <- df[-1,] # remove first row
+row.names(df)<-NULL
+pander(df, style = 'rmarkdown')
+```
+
+```{r table-state-results, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+require(pander)
+panderOptions('table.split.table', Inf)
+set.caption("State results for the 2017/2018 season averaged over all regions. Seasonal target log-scores are evaluated under the non-parametric sampling method described in section 3.1. Short term forecast target log-scores are evaluted under the bias correction method described in section 3.2. MSE of both the available data and the adjusted data under the bias correction method as an estimate of the final data is reported. Diebold-Mariano tests of forecasts made from the available data versus the adjusted data under each model are reported. ")
+my.data <- " Method  | PWP | PW |  MSE|1 | 2 | 3 | 4
+  Available    |-3.282336 | -1.869723| 0.6009343  |-2.62415 |-3.078636 | -3.557894| -3.878689
+  Adjusted   |  -3.272363| -1.867507 | 0.5800103 |-2.574505 | -3.048458 |-3.543711|-3.850256
+  Perfect  | -1.967124 | -2.872685| 0 | -1.802337 | -3.031271| -3.553787 | -3.860992 
+  DM p-value | 0.1877 | 0.9266 | 0.6688 | 0.06581 | 0.05104 | 0.1185 | 0.4033 "
+df <- read.delim(textConnection(my.data),header=FALSE,sep="|",strip.white=TRUE,stringsAsFactors=FALSE)
+names(df) <- unname(as.list(df[1,])) # put headers on
+df <- df[-1,] # remove first row
+row.names(df)<-NULL
+pander(df, style = 'rmarkdown')
+```
+
+
+
+```{r setup,echo=FALSE,warning=FALSE,message=FALSE,fig.width=7, fig.height=10,fig.cap="\\label{fig:setup} Region level wILI data for all available seasons. Notice the highly seasonal structure and high region variability."}
+library(dplyr)
+library(ggplot2)
+library(FluSight)
+
+data <- readRDS("../data/flu_data_with_backfill.rds")
+levels(data$region) <- c("National",paste0("HHS ",1:10))
+current_observed_data <- data %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag))
+current_observed_data <- current_observed_data[order(current_observed_data$epiweek),]
+current_observed_data$week <- unlist(lapply(current_observed_data$epiweek,function(x){return(substr(x,5,7))}))
+current_observed_data$week <- year_week_to_season_week(as.numeric(as.character(current_observed_data$week)),2015)
+
+current_observed_data$week <- as.numeric(as.character(current_observed_data$week ))
+current_observed_data$season <- unlist(lapply(current_observed_data$epiweek,function(x){return(substr(x,1,4))}))
+
+
+
+```
+
+
+```{r data-overview, echo=FALSE,warning=FALSE,fig.width=7, fig.height=4,fig.cap="\\label{fig:data-overview}  A: wILI data from the 2012/2013 and the 2013/2014 season across 4 example regions. Notice the regional variability and the seasonal structure with a peak usually (but not always) occuring somewhere between week 20 and week 30.  B: Data from 2013-09-29 (week 1 of the 2013/2014 season) to 2013-12-22 (week 12 of the 2013/2014 season) from HHS region 9. The 'revised' data is a snapshot of wILI values for the listed weeks if the current time is the end of the 2013/2014 season. The 'unrevised' data is a snapshot of wILI values for the listed weeks if the current time were 2013-12-22. Similarly, the lag 5 data is a snapshot of wILI values for the listed weeks if the current time were 5 weeks after 2013-12-22.  Notice that unrevised data is both over and under reported relative to the revised data at different epiweeks. Dashed line represents the season onset baseline. " }
+
+library(cowplot)
+library(dplyr)
+tmp_try <- data[data$epiweek <= "201320" & data$epiweek >= "201240" ,]
+fully_observed_data <- data %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag))
+for (epiwk in unique(tmp_try$epiweek)){
+  for (rg in unique(tmp_try$region)){
+    for (l in unique(tmp_try$lag)){
+      tmp_try[tmp_try$epiweek == epiwk & tmp_try$region == rg & tmp_try$lag == l,]$wili <- tmp_try[tmp_try$epiweek == epiwk & tmp_try$region == rg & tmp_try$lag == l,]$wili/fully_observed_data[fully_observed_data$epiweek == epiwk & fully_observed_data$region == rg,]$wili
+    }
+  }
+}
+
+
+
+fully_observed_data <- data %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag))
+fully_observed_data$week <- unlist(lapply(fully_observed_data$epiweek,function(x){return(substr(x,5,7))}))
+fully_observed_data$week <- year_week_to_season_week(as.numeric(as.character(fully_observed_data$week)),2015)
+
+data_sub <- data[data$epiweek >="201240" & data$epiweek <= "201320" ,]
+
+data_sub$week <- unlist(lapply(data_sub$epiweek,function(x){return(substr(x,5,7))}))
+data_sub$week <- year_week_to_season_week(as.numeric(as.character(data_sub$week)),2015)
+
+data_frame_for_lag_plot <- matrix(NA,ncol=17)
+for (i in seq(41,52)){
+     data_frame_for_lag_plot <- rbind(data_frame_for_lag_plot,as.matrix(data_sub[ data_sub$issue <= as.numeric(paste0("2015",i)),] %>% group_by(region,epiweek) %>%
+                filter(lag == max(lag))))
+}
+
+for (i in c(paste0("0",1:9),seq(10,20))){
+     data_frame_for_lag_plot <- rbind(data_frame_for_lag_plot,as.matrix(data_sub[ data_sub$issue <= as.numeric(paste0("2016",i)),] %>% group_by(region,epiweek) %>%
+                                                                          filter(lag == max(lag))))
+   }
+data_frame_for_lag_plot <- data.frame(data_frame_for_lag_plot[2:nrow(data_frame_for_lag_plot),])
+data_frame_for_lag_plot$wili <- as.numeric(as.character(data_frame_for_lag_plot$wili))
+    #annotate("text", x = c(25), y=1.8, label = c("Y_{r,s,15,7}"))
+data_frame_for_lag_plot$lag <- as.factor(as.numeric(as.character(data_frame_for_lag_plot$lag)))
+data_frame_for_lag_plot$season_week <- as.numeric(as.character(data_frame_for_lag_plot$week))
+
+ library(gridExtra)
+
+
+p1 <- invisible(ggplot(data_frame_for_lag_plot[data_frame_for_lag_plot$lag == 0 |data_frame_for_lag_plot$lag == 1 |data_frame_for_lag_plot$lag == 2 |data_frame_for_lag_plot$lag == 3 | data_frame_for_lag_plot$lag == 4 | data_frame_for_lag_plot$lag == 5 |data_frame_for_lag_plot$lag == 10 | data_frame_for_lag_plot$lag == 20 | data_frame_for_lag_plot$lag == 30,],aes(x=as.numeric(as.character(week)),y=wili,col=lag)) + geom_line(size=.5) + theme_bw() +facet_wrap(~region) +
+     geom_line(data=fully_observed_data[fully_observed_data$epiweek >=   "201540" & fully_observed_data$epiweek <= "201620",],aes(x=as.numeric(as.character(week)),y=wili,col=as.factor("Revised")),color="black",linetype="dashed") + ylab("wwILI") + xlab("Season week")+ggtitle("Revisions to 2015/2016")+ theme(plot.title = element_text(hjust = 0.5)))
+
+
+data_before_2016_01_1 <- data[data$epiweek >=201240 & data$epiweek <=201252&  data$issue <= 201252 & data$region == "HHS 9",] %>% group_by(epiweek,region)%>% filter(lag==max(lag))
+data_before_2016_01_2 <- data[data$epiweek >=201240 & data$epiweek <=201252& data$issue <= 201305 & data$region == "HHS 9",] %>% group_by(epiweek,region)%>% filter(lag==max(lag))
+data_before_2016_01_10 <- data[data$epiweek >=201240 & data$epiweek <=201252& data$issue <= 201310 & data$region == "HHS 9",] %>% group_by(epiweek,region)%>% filter(lag==max(lag))
+data_before_2016_01_2 <- data[data$epiweek >=201240 & data$epiweek <=201252& data$issue <= 201301 & data$region == "HHS 9",] %>% group_by(epiweek,region)%>% filter(lag==max(lag))
+
+
+pr_df <- rbind(fully_observed_data[fully_observed_data$epiweek <= 201252 & fully_observed_data$epiweek >= 201240 & fully_observed_data$region == "HHS 9",],data_before_2016_01_1,data_before_2016_01_2,data_before_2016_01_10,data_before_2016_01_2)
+
+
+pr_df$full <- c(rep("Revised",nrow(fully_observed_data[fully_observed_data$epiweek <= 201252 & fully_observed_data$epiweek >= 201240& fully_observed_data$region == "HHS 9",])),rep("Unrevised",nrow(data_before_2016_01_1)),rep("5 weeks out",nrow(data_before_2016_01_2)),rep("10 weeks out",nrow(data_before_2016_01_10)),rep("1 week out",nrow(data_before_2016_01_2)))
+
+pr_df$Revision <- as.factor(pr_df$full)
+
+
+get_onset_baseline <- function(region, season = "2015/2016") {
+  Influenza_onset_baselines <- read.csv("/Users/gcgibson/flu_experiments/data/flu_onset_baselines.csv")
+  levels(Influenza_onset_baselines$region) <- c("National","HHS 1","HHS 10",paste0("HHS ",2:9))
+  ## pick baseline
+  ## assumes region is either "National" or "Region k" format
+  idx <- which(Influenza_onset_baselines$region==region&
+                 Influenza_onset_baselines$season==season)
+  reg_baseline <- Influenza_onset_baselines[idx, "baseline"]
+  
+  return(reg_baseline)
+}
+library(MMWRweek)
+l <- lapply(c(seq(40,52)),function(x){
+  if(x >= 31){
+    return (MMWRweek2Date(2013,x))
+  } else{
+    return (MMWRweek2Date(2014,x))
+  }
+  
+})
+dates <- (d <- do.call("c", l))
+cc <- scales::seq_gradient_pal("blue")(seq(0,1,length.out=10))
+
+
+pr_df$Revision <- factor(pr_df$Revision, levels = c("Unrevised","Revised","1 week out","5 weeks out", "10 weeks out"))
+
+p1 <- invisible(ggplot(pr_df,aes(x=epiweek,y=wili,col=Revision)) + geom_line(alpha=.2)  + theme_bw() +  theme(axis.text.x = element_text(angle = 90, hjust = 1))  + geom_hline(aes(yintercept=get_onset_baseline("HHS 9","2012/2013")),alpha=.5,linetype="dashed") + geom_point(alpha=.5) +scale_x_continuous(labels=rev(dates),breaks=unique(pr_df$epiweek)) + ggtitle("Region 9") + xlab("")   +     
+    scale_colour_manual(values=cc))
+
+subset_for_p2 <- current_observed_data[(current_observed_data$season == 2012 |current_observed_data$season == 2013 ) & (current_observed_data$region == "HHS 2" | current_observed_data$region == "HHS 10" | current_observed_data$region == "HHS 4" | current_observed_data$region == "National"),]
+
+subset_for_p2[subset_for_p2$season == "2013",]$season <- rep("2013/2014",length(subset_for_p2[subset_for_p2$season == "2013",]$season))
+subset_for_p2[subset_for_p2$season == "2012",]$season <- rep("2012/2013",length(subset_for_p2[subset_for_p2$season == "2012",]$season))
+
+p2 <- invisible(ggplot(subset_for_p2,aes(x=week,y=wili,col=region))+ geom_line() + facet_grid(region~season)  +theme_bw() + ylab("wILI") + theme(legend.position="none"))
+plot_grid(p2,p1, ncol=2,labels="AUTO")
+
+
+```
+
+
+```{r revision-ratios,echo=FALSE,warning=FALSE,fig.width=7, fig.height=6,fig.cap="\\label{fig:revision-ratios}Reporting revision differences broken down by region. The x-axis represents the lag value at discrete intervals. We see that for all regions the revision differences converges to 0 as the lag increases and that for the most part revision differences are centered around the currently reported data. "}
+library(reshape2)
+library(ggplot2)
+lag_df <- read.csv("lag_df")
+lag_df$season <- unlist(lapply(lag_df$week,function(x){
+  
+  tmp_season <- as.numeric(substr(x,1,4))
+  tmp_week <- as.numeric(substr(x,5,7))
+  
+  if (tmp_week <= 30){
+    return (tmp_season-1)
+  } else{
+    return (tmp_season)
+  }
+  
+  }))
+long_lag <- melt(data = lag_df, id.vars = c("X", "Region","week","Incidence","season","season_week"))
+levels(long_lag$Region) <- c(paste0("HHS ",1:10),"National")
+ggplot(long_lag[long_lag$variable== "L0" |long_lag$variable== "L1"| long_lag$variable== "L5" |long_lag$variable== "L10" | long_lag$variable== "L30"  , ],aes(x=variable,y=value,col=Region)) + geom_boxplot()+ geom_abline(intercept = 0,linetype = "dashed",alpha=.1,slope = 0)  +
+  theme(axis.title.x=element_blank()) + labs(y=expression(d["r,s,w,*"]))
+```
+
+```{r notation_and_g,echo=FALSE,warning=FALSE,message=FALSE,fig.width=7, fig.height=4,fig.cap="\\label{fig:notation_and_g} A. Example of observed data distribution g under the empirical distribution induced by sampling historical reporting revision differences and applying them to the currently observed data. Notice the uncertainty around the currently observed data as represented by both an 80 and 50 CI around the true observed data. The sampling method is able to put some positive probability on the finally revised data, but remains centered around the currently observed data. B Notation schematic highlighting the cross sections of data used in the experiments. Of primary interest are the three vectors: the set of revised data $\\vec{Y}_{4,\\infty}$, the most recent set of data $\\vec{Y}_{4,l}$ and the initially reported set of data $\\vec{Y}_{4,0}$." }
+
+fully_observed_data <- data %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag))
+fully_observed_2016 <- fully_observed_data[fully_observed_data$epiweek >=201540 & fully_observed_data$epiweek <= 201620 & fully_observed_data$region == "HHS 3",]
+
+lag_df <- read.csv("../data/lag_df")
+currently_observed_2016 <- data[data$epiweek >=201540 & data$epiweek<= 201620 &data$region == "HHS 3" & data$lag == 0,]
+
+sampled_data <- matrix(NA,nrow=10000,ncol=length(currently_observed_2016$wili))
+
+for (i in 1:1000){
+  tmp <- currently_observed_2016$wili
+  for (j in 1:length(currently_observed_2016$wili)){
+    
+    random_a <- sample(lag_df$L0,1)
+    
+    tmp[j] <- tmp[j]/random_a
+  }
+  sampled_data[i,]<- tmp
+}
+
+sampled_data <- sampled_data[2:nrow(sampled_data),]
+sampled_data_vector <- as.vector(t(sampled_data))
+
+plot_df_now <- data.frame(y =sampled_data_vector,x=rep(1:length(currently_observed_2016$wili),nrow(sampled_data)),lr=rep(1:nrow(sampled_data),each=length(currently_observed_2016$wili)) )
+
+library(robustbase)
+library(matrixStats)
+
+
+p1 <-suppressWarnings(ggplot(fully_observed_2016,aes(x=1:length(fully_observed_2016$wili),y=wili,color="black",group=1)) + geom_ribbon(data=data.frame(x=1:33,ymin=colQuantiles(sampled_data,probs = c(.025,.975),na.rm = T)[,1],ymax=colQuantiles(sampled_data,probs = c(.10,.90),na.rm = T)[,2]),aes(x=x,ymin=ymin,ymax=ymax,y=1:33,color='grey'),alpha=.2) + ylim(0,6) + geom_ribbon(data=data.frame(x=1:33,ymin=colQuantiles(sampled_data,probs = c(.25,.75),na.rm = T)[,1],ymax=colQuantiles(sampled_data,probs = c(.25,.75),na.rm = T)[,2]),aes(x=x,ymin=ymin,ymax=ymax,y=1:33),color='grey',alpha=.2) + ylim(0,6) + geom_line()+ geom_line(data=currently_observed_2016,aes(x=1:length(currently_observed_2016$wili),y=wili,color="red",group=1))+ geom_line(data=fully_observed_2016,aes(x=1:length(currently_observed_2016$wili),y=colMedians(sampled_data,na.rm = T),color="blue",group=1)) + 
+  scale_color_identity(name = "Data",
+                          breaks = c("black", "red", "blue"),
+                          labels = c("Revised", "Initially Reported", "Estimated"),
+                          guide = "legend") + xlab("Season Week") + ylab("wILI") )
+
+
+library(png)
+
+myImage <- png::readPNG("./diag1.png")
+myImage <- grid::rasterGrob(myImage, interpolate = TRUE)
+
+p2 <-ggplot() + 
+    geom_blank() + 
+    annotation_custom(myImage, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf)
+
+
+suppressWarnings(plot_grid(p1,p2, rel_widths = c(2, 1),labels = c("A","B")))
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r results,echo=FALSE,warning=FALSE,message=FALSE,fig.width=7, fig.height=4,fig.cap="\\label{fig:results} Log score histograms of the difference in scores between forecasts made from the method noted and forecasts made from the revised data for the season onset target. Mean difference is displayed by the red line. The sampling method is able to remove the tail of the histogram for the season onset target.Histograms are presented with log scaled y-axis. "}
+
+levels(result_df$region) <- c("HHS 1", "HHS 10" ,paste0("HHS ",2:9),"National")
+
+
+result_df$model <- factor(result_df$model,levels=c("unrevised","revised","mean","sampling","mean_region","mean_week","non_linear","hierarchical"))
+
+
+
+sampling_v_revised <- result_df[result_df$target == "Season onset" & result_df$model == "revised" ,]$prob - result_df[result_df$target == "Season onset" & result_df$model == "sampling" ,]$prob
+
+unrevised_v_revised <- result_df[result_df$target == "Season onset" &result_df$model == "revised" ,]$prob - result_df[result_df$target == "Season onset" & result_df$model == "unrevised" ,]$prob
+
+mean_v_revised <- result_df[result_df$target == "Season onset" &result_df$model == "revised" ,]$prob - result_df[result_df$target == "Season onset" & result_df$model == "mean" ,]$prob
+
+                            
+p2 <- invisible(ggplot(data.frame(x=sampling_v_revised),aes(x=x)) +geom_histogram() + xlim(-10,10) + xlab("Sampling v Revised") + scale_y_continuous(trans='log2'))
+p3 <- invisible(ggplot(data.frame(x=mean_v_revised),aes(x=x)) + geom_histogram()+ xlim(-10,10)+ xlab("Mean v Revised") + scale_y_continuous(trans='log2'))
+p4 <- invisible(ggplot(data.frame(x=unrevised_v_revised),aes(x=x)) + geom_histogram()+ xlim(-10,10)+ xlab("Unrevised v Revised") + scale_y_continuous(trans='log2'))
+
+annotation_1 <- round(sum(sampling_v_revised >=5)/length(sampling_v_revised),3)*100
+annotation_2 <- round(sum(mean_v_revised >=5)/length(mean_v_revised),3)*100
+annotation_3 <- round(sum(unrevised_v_revised >=5)/length(unrevised_v_revised),3)*100
+
+
+p2 <- p2 + annotate("text",x=10,y=1500,label=paste0(annotation_1," percent of observations >5"),hjust=1,vjust=1,size=3) + geom_vline(aes(xintercept=mean(unrevised_v_revised)),col='red')
+p3 <- p3 + annotate("text",x=10,y=1500,label=paste0(annotation_2," percent of observations >5"),hjust=1,vjust=1,size=3)+ geom_vline(aes(xintercept=mean(mean_v_revised)),col='red')
+p4 <- p4 + annotate("text",x=10,y=1500,label=paste0(annotation_3," percent of observations >5"),hjust=1,vjust=1,size=3)+ geom_vline(aes(xintercept=mean(sampling_v_revised)),col='red')
+
+
+plot_grid(p4,p2,ncol=1)
+library(forecast)
+library(pander)
+table_df_1_wk <- matrix(c(dm.test(result_df[result_df$target == "1 Wk Ahead" &result_df$model == "sampling" ,]$prob,result_df[result_df$target == "1 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "1 Wk Ahead" &result_df$model == "mean" ,]$prob,result_df[result_df$target == "1 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "1 Wk Ahead" &result_df$model == "revised" ,]$prob,result_df[result_df$target == "1 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value
+    ),ncol=3)
+#colnames(table_df) <- c("Sampling v Unevised","Mean v Unevised","Revised v Unrevised")
+#rownames <- c("p-val")
+#pander(table_df,caption="1 Wk Ahead")
+
+table_df_2_wk <- matrix(c(dm.test(result_df[result_df$target == "2 Wk Ahead" &result_df$model == "sampling" ,]$prob,result_df[result_df$target == "2 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "2 Wk Ahead" &result_df$model == "mean" ,]$prob,result_df[result_df$target == "2 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "2 Wk Ahead" &result_df$model == "revised" ,]$prob,result_df[result_df$target == "2 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value
+    ),ncol=3)
+#colnames(table_df) <- c("Sampling v Unevised","Mean v Unevised","Revised v Unrevised")
+#rownames <- c("p-val")
+#pander(table_df,caption="2 Wk Ahead")
+
+
+table_df_3_wk <- matrix(c(dm.test(result_df[result_df$target == "3 Wk Ahead" &result_df$model == "sampling" ,]$prob,result_df[result_df$target == "3 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "3 Wk Ahead" &result_df$model == "mean" ,]$prob,result_df[result_df$target == "3 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "3 Wk Ahead" &result_df$model == "revised" ,]$prob,result_df[result_df$target == "3 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value
+    ),ncol=3)
+#colnames(table_df) <- c("Sampling v Unevised","Mean v Unevised","Revised v Unrevised")
+#rownames <- c("p-val")
+#pander(table_df,caption="3 Wk Ahead")
+
+table_df_4_wk <- matrix(c(dm.test(result_df[result_df$target == "4 Wk Ahead" &result_df$model == "sampling" ,]$prob,result_df[result_df$target == "4 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "4 Wk Ahead" &result_df$model == "mean" ,]$prob,result_df[result_df$target == "4 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "4 Wk Ahead" &result_df$model == "revised" ,]$prob,result_df[result_df$target == "4 Wk Ahead" & result_df$model == "unrevised",]$prob)$p.value
+    ),ncol=3)
+#colnames(table_df) <- c("Sampling v Unevised","Mean v Unevised","Revised v Unrevised")
+#rownames <- c("p-val")
+#pander(table_df,caption="4 Wk Ahead")
+
+table_df_peak_week_p <- matrix(c(dm.test(result_df[result_df$target == "Peak Week Percentage" &result_df$model == "sampling" ,]$prob,result_df[result_df$target == "Peak Week Percentage" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "Peak Week Percentage" &result_df$model == "mean" ,]$prob,result_df[result_df$target == "Peak Week Percentage" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "Peak Week Percentage" &result_df$model == "revised" ,]$prob,result_df[result_df$target == "Peak Week Percentage" & result_df$model == "unrevised",]$prob)$p.value
+    ),ncol=3)
+#colnames(table_df) <- c("Sampling v Unevised","Mean v Unevised","Revised v Unrevised")
+#rownames <- c("p-val")
+#pander(table_df,caption="Season peak week percentage")
+
+
+table_df_peak_week <- matrix(c(dm.test(result_df[result_df$target == "Peak Week" &result_df$model == "sampling" ,]$prob,result_df[result_df$target == "Peak Week" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "Peak Week" &result_df$model == "mean" ,]$prob,result_df[result_df$target == "Peak Week" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "Peak Week" &result_df$model == "revised" ,]$prob,result_df[result_df$target == "Peak Week" & result_df$model == "unrevised",]$prob)$p.value
+    ),ncol=3)
+#colnames(table_df) <- c("Sampling v Unevised","Mean v Unevised","Revised v Unrevised")
+#rownames <- c("p-val")
+#pander(table_df,caption="Peak Week")
+
+
+table_df_season_onset <- matrix(c(dm.test(result_df[result_df$target == "Season onset" &result_df$model == "sampling" ,]$prob,result_df[result_df$target == "Season onset" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "Season onset" &result_df$model == "mean" ,]$prob,result_df[result_df$target == "Season onset" & result_df$model == "unrevised",]$prob)$p.value,
+dm.test(result_df[result_df$target == "Season onset" &result_df$model == "revised" ,]$prob,result_df[result_df$target == "Season onset" & result_df$model == "unrevised",]$prob)$p.value
+    ),ncol=3)
+#colnames(table_df) <- c("Sampling v Unevised","Mean v Unevised","Revised v Unrevised")
+#rownames <- c("p-val")
+table_df <-rbind(table_df_1_wk,table_df_2_wk,table_df_3_wk,table_df_4_wk,table_df_peak_week,table_df_peak_week_p,table_df_season_onset)
+rownames(table_df) <- c("1 Wk Ahead","2 Wk Ahead","3 Wk Ahead","4 Wk Ahead","Peak Week","Peak Week Percentage","Season onset")
+colnames(table_df) <- c("Sampling v Unrevised","Mean v Unrevised","Revised v Unrevised")
+
+table_df <- table_df[,c(1,3)]
+#pander(table_df,caption = "p-values from Diebold Mariano Test of Difference of Log Score Between Methods. Notice that for almost all 1-4 week ahead targets there is no statistically significant (at .05 level) difference between forecasts made from the revised data and the unrevised data. We also see that on seasonal targets there is a statistically significant difference between the log score of forecasts made from the unrevised data and from the revised data. However, only the sampling method (not the mean scale up method) is able to similarly reject the null that the difference in log score between the methods is 0. We also note that the sampling method is statistically signficiantly different from the unrevised data when forecasting 1-4 week ahead. This means there is a statistically signficant reduction in log score.",split.table = Inf)
+
+```
+
+
+```{r results-2,echo=FALSE,warning=FALSE,message=FALSE,fig.width=7, fig.height=4,fig.cap="\\label{fig:results-2} Log score histograms of the difference in scores between forecasts made from the method noted and forecasts made from the revised data for the 1 week ahead target. Mean difference is displayed by the red line. There is very little difference between the histograms. Histograms are presented with log scaled y-axis. "}
+
+sampling_v_revised <- result_df[result_df$target == "1 Wk Ahead" & result_df$model == "revised" ,]$prob - result_df[result_df$target == "1 Wk Ahead" & result_df$model == "sampling" ,]$prob
+
+unrevised_v_revised <- result_df[result_df$target == "1 Wk Ahead" &result_df$model == "revised" ,]$prob - result_df[result_df$target == "1 Wk Ahead" & result_df$model == "unrevised" ,]$prob
+
+mean_v_revised <- result_df[result_df$target == "1 Wk Ahead" &result_df$model == "revised" ,]$prob - result_df[result_df$target == "1 Wk Ahead" & result_df$model == "mean" ,]$prob
+
+                            
+p2 <- ggplot(data.frame(x=sampling_v_revised),aes(x=x)) +geom_histogram() + xlim(-10,10) + xlab("Sampling v Revised") +scale_y_continuous(trans='log2')
+p3 <- ggplot(data.frame(x=mean_v_revised),aes(x=x)) + geom_histogram()+ xlim(-10,10)+ xlab("Mean v Revised") + scale_y_continuous(trans='log2')
+p4 <- ggplot(data.frame(x=unrevised_v_revised),aes(x=x)) + geom_histogram()+ xlim(-10,10)+ xlab("Unrevised v Revised") + scale_y_continuous(trans='log2')
+
+annotation_1 <- round(sum(sampling_v_revised >=5)/length(sampling_v_revised),3)*100
+annotation_2 <- round(sum(mean_v_revised >=5)/length(mean_v_revised),3)*100
+annotation_3 <- round(sum(unrevised_v_revised >=5)/length(unrevised_v_revised),3)*100
+
+
+p2 <- p2 + annotate("text",x=10,y=1500,label=paste0(annotation_1," percent of observations >5"),hjust=1,vjust=1,size=3) + geom_vline(aes(xintercept=mean(unrevised_v_revised)),col='red')
+p3 <- p3 + annotate("text",x=10,y=1500,label=paste0(annotation_2," percent of observations >5"),hjust=1,vjust=1,size=3)
+p4 <- p4 + annotate("text",x=10,y=1500,label=paste0(annotation_3," percent of observations >5"),hjust=1,vjust=1,size=3)+ geom_vline(aes(xintercept=mean(sampling_v_revised)),col='red')
+
+
+plot_grid(p4,p2,ncol=1)
+```
+
+
+
+
+```{r results-3,echo=FALSE,warning=FALSE,message=FALSE,fig.width=7, fig.height=4,fig.cap="\\label{fig:results-3} Log score histograms of the difference in scores between forecasts made from the method noted and forecasts made from the revised data for the peak week percentage. Mean difference is displayed by the red line. There is very little difference between the histograms. Histograms are presented with log scaled y-axis. "}
+
+sampling_v_revised <- result_df[result_df$target == "Peak Week Percentage" & result_df$model == "revised" ,]$prob - result_df[result_df$target == "Peak Week Percentage" & result_df$model == "sampling" ,]$prob
+
+unrevised_v_revised <- result_df[result_df$target == "Peak Week Percentage" &result_df$model == "revised" ,]$prob - result_df[result_df$target == "Peak Week Percentage" & result_df$model == "unrevised" ,]$prob
+
+mean_v_revised <- result_df[result_df$target == "Peak Week Percentage" &result_df$model == "revised" ,]$prob - result_df[result_df$target == "Peak Week Percentage" & result_df$model == "mean" ,]$prob
+
+                            
+p2 <- ggplot(data.frame(x=sampling_v_revised),aes(x=x)) +geom_histogram() + xlim(-10,10) + xlab("Sampling v Revised") +scale_y_continuous(trans='log2')
+p3 <- ggplot(data.frame(x=mean_v_revised),aes(x=x)) + geom_histogram()+ xlim(-10,10)+ xlab("Mean v Revised") + scale_y_continuous(trans='log2')
+p4 <- ggplot(data.frame(x=unrevised_v_revised),aes(x=x)) + geom_histogram()+ xlim(-10,10)+ xlab("Unrevised v Revised") + scale_y_continuous(trans='log2')
+
+annotation_1 <- round(sum(sampling_v_revised >=5)/length(sampling_v_revised),3)*100
+annotation_2 <- round(sum(mean_v_revised >=5)/length(mean_v_revised),3)*100
+annotation_3 <- round(sum(unrevised_v_revised >=5)/length(unrevised_v_revised),3)*100
+
+
+p2 <- p2 + annotate("text",x=10,y=1500,label=paste0(annotation_1," percent of observations >5"),hjust=1,vjust=1,size=3) + geom_vline(aes(xintercept=mean(unrevised_v_revised)),col='red')
+p3 <- p3 + annotate("text",x=10,y=1500,label=paste0(annotation_2," percent of observations >5"),hjust=1,vjust=1,size=3)+ geom_vline(aes(xintercept=mean(mean_v_revised)),col='red')
+p4 <- p4 + annotate("text",x=10,y=1500,label=paste0(annotation_3," percent of observations >5"),hjust=1,vjust=1,size=3)+ geom_vline(aes(xintercept=mean(sampling_v_revised)),col='red')
+
+
+plot_grid(p4,p2,ncol=1)
+```
+
+
+```{r explanations,eval=FALSE,echo=FALSE,warning=FALSE,fig.width=7, fig.height=4,fig.cap="\\label{fig:explanations} A: By examining the correlation between log score and reporting revisions we see that poor performing 1 week ahead forecasts are not highly correlated with extreme reporting ratios (further from 1). B Relationship between the sample based variance of the initially reported revision ratios over all test seasons and all test regions and the difference in the log score of forecasts based on the revised and the unrevised data. A single point represents a single region and season combination for all test seasons. Notice that as the variance of the reporting ratio decreases so does the difference in the log score, and therefore the room for improvement made by the revision algorithms diminishes. This is expected, as the more revisions occur during a season, the more the revision algorithms would help."}
+
+
+
+ 
+lag_df <- read.csv("../data/lag_df")
+rr <- c()
+for (row in 1:nrow(result_df_wk_ahead)){
+  tmp <- lag_df[lag_df$week == result_df_wk_ahead[row,]$epiweek & lag_df$Region == result_df_wk_ahead[row,]$region,]$L0
+  if (length(tmp) > 0){
+    rr <- c(rr,tmp)
+  }else{
+    rr <- c(rr,NA)
+  }
+  
+
+}
+result_df_wk_ahead$rr <- rr
+
+
+p2 <- ggplot(result_df_wk_ahead[result_df_wk_ahead$model == "sampling" & result_df_wk_ahead$region == "nat",],aes(x=rr,y=prob)) + geom_point()  + theme_bw() + ylab("Log Score") + xlab("Reporting Ratio")
+
+
+result_df_season_onset$week <- unlist(lapply(result_df_season_onset$epiweek,function(x){
+  return (year_week_to_season_week(as.numeric(substr(x,5,7)),as.numeric(substr(x,1,4))))
+}))
+
+
+lag_df <- read.csv("../data/lag_df")
+#result_df <- read.csv("../")
+lag_df$season <- unlist(lapply(lag_df$week,function(x){
+  
+  tmp_season <- as.numeric(substr(x,1,4))
+  tmp_week <- as.numeric(substr(x,5,7))
+  
+  if (tmp_week <= 30){
+    return (tmp_season-1)
+  } else{
+    return (tmp_season)
+  }
+  
+  }))
+
+
+library(pander)
+library(dplyr)
+
+avg_results <- result_df %>% group_by(region,year,model) %>% summarise(prob = mean(prob))
+
+avg_lag<- lag_df%>% group_by(Region,season) %>% summarise(var_lag = var(L0,na.rm = T))
+avg_results$diff <- avg_results[avg_results$model == "revised",]$prob - avg_results[avg_results$model == "unrevised",]$prob
+
+
+
+ggplot_df <- data.frame(y =avg_results[avg_results$model == "revised",]$prob - avg_results[avg_results$model == "unrevised",]$prob,x=avg_lag[avg_lag$season >= 2015,]$var_lag,season=avg_results[avg_results$model == "revised",]$year,region=avg_results[avg_results$model == "revised",]$region)
+#plot(avg_lag[avg_lag$season >= 2015,]$var_lag,avg_results[avg_results$model == "Revised",]$prob - avg_results[avg_results$model == "Unrevised",]$prob)
+p3 <- ggplot(ggplot_df, aes(x=sqrt(x),y=y,col=season,label=region))+  xlab( expression(Var(a["r,s,w,0"]))) + ylab("Delta log score")+geom_text(aes(label=region),vjust="inward",hjust="inward")
+
+
+library(cowplot)
+#plot_grid(p1, p2, p3, align = "v", nrow = 3, rel_heights = c(1/4, 1/4, 1/2))
+
+library(grid) # for "unit"
+
+plot_grid(p2,p3,labels="AUTO",rel_widths = c(1,2))
+
+
+```
+
+
+
+
+
+
+
+```{r season-target-explanation,echo=FALSE,warning=FALSE,fig.width=7, fig.height=4,fig.cap="\\label{fig:season-target-explanation}A. Example of HHS 2 seasonal target delay using currently reported data as of 2016 week 19 (black) against the fully revised data (blue). Notice that revisions are made to the sesaon onset at week 2016-01 that make initially reported season onset invalid. Similarly, season peak week is initially reported above the true value, so for all epiweeks after 2016-10 the model incorrectly places all denisty on or above the initally reported density. B Difference in log score between forecasts made from unrevised vs revised data for the week ahead targets under both multibin and single bin log scoring rules. We can see that, especially for 1-2 week ahead targets, there is a difference between the two scoring procedures. However, this difference is quite samll on the log score scale, suggesting the scoring rule is not masking the effect of revisions.   "}
+result_df_season_onset_single_bin<- readRDS("../result_objects_single_bin/season_onset_result_df")
+result_df_peak_week_percentage_single_bin <- readRDS("../result_objects_single_bin/peak_week_percentage_result_df")
+result_df_peak_week_single_bin <- readRDS("../result_objects_single_bin/peak_week_result_df")
+result_df_wk_ahead_single_bin <- readRDS("../result_objects_single_bin/wk_ahead_result_df")
+result_df_wk_ahead_2_single_bin <- readRDS("../result_objects_single_bin/wk_ahead_2_result_df")
+result_df_wk_ahead_3_single_bin <- readRDS("../result_objects_single_bin/wk_ahead_3_result_df")
+result_df_wk_ahead_4_single_bin <- readRDS("../result_objects_single_bin/wk_ahead_4_result_df")
+
+result_df_single_bin <- rbind(result_df_season_onset_single_bin,result_df_peak_week_percentage_single_bin,result_df_peak_week_single_bin,result_df_wk_ahead_single_bin,result_df_wk_ahead_2_single_bin,result_df_wk_ahead_3_single_bin,result_df_wk_ahead_4_single_bin)
+
+result_df_single_bin$target <- c(rep("Season onset",nrow(result_df_season_onset_single_bin)),
+                      rep("Peak Week Percentage",nrow(result_df_peak_week_percentage_single_bin)),
+                      rep("Peak Week",nrow(result_df_peak_week_single_bin)),
+                      rep("1 Wk Ahead",nrow(result_df_wk_ahead_single_bin)),
+                      rep("2 Wk Ahead",nrow(result_df_wk_ahead_single_bin)),
+                      rep("3 Wk Ahead",nrow(result_df_wk_ahead_single_bin)),
+                      rep("4 Wk Ahead",nrow(result_df_wk_ahead_single_bin))
+                      )
+
+levels(result_df_single_bin$region) <- c("HHS 1", "HHS 10" ,paste0("HHS ",2:9),"National")
+
+
+result_df_single_bin$model <- factor(result_df_single_bin$model,levels=c("unrevised","revised","mean","sampling","mean_region","mean_week","non_linear","hierarchical"))
+
+d1 <- mean(result_df[result_df$model == "unrevised" & result_df$target == "1 Wk Ahead",]$prob - result_df[result_df$model == "revised"  & result_df$target == "1 Wk Ahead" ,]$prob )
+
+d2 <- mean(result_df_single_bin[result_df_single_bin$model == "unrevised" & result_df_single_bin$target == "1 Wk Ahead",]$prob - result_df_single_bin[result_df_single_bin$model == "revised"  & result_df_single_bin$target == "1 Wk Ahead" ,]$prob )
+
+d3 <- mean(result_df[result_df$model == "unrevised" & result_df$target == "2 Wk Ahead",]$prob - result_df[result_df$model == "revised"  & result_df$target == "2 Wk Ahead" ,]$prob )
+
+d4 <- mean(result_df_single_bin[result_df_single_bin$model == "unrevised" & result_df_single_bin$target == "2 Wk Ahead",]$prob - result_df_single_bin[result_df_single_bin$model == "revised"  & result_df_single_bin$target == "2 Wk Ahead" ,]$prob )
+
+
+d5 <- mean(result_df[result_df$model == "unrevised" & result_df$target == "3 Wk Ahead",]$prob - result_df[result_df$model == "revised"  & result_df$target == "3 Wk Ahead" ,]$prob )
+
+
+d6 <-mean(result_df_single_bin[result_df_single_bin$model == "unrevised" & result_df_single_bin$target == "3 Wk Ahead",]$prob - result_df_single_bin[result_df_single_bin$model == "revised"  & result_df_single_bin$target == "3 Wk Ahead" ,]$prob )
+
+
+d7 <- mean(result_df[result_df$model == "unrevised" & result_df$target == "4 Wk Ahead",]$prob - result_df[result_df$model == "revised"  & result_df$target == "4 Wk Ahead" ,]$prob )
+
+
+d8 <-mean(result_df_single_bin[result_df_single_bin$model == "unrevised" & result_df_single_bin$target == "4 Wk Ahead",]$prob - result_df_single_bin[result_df_single_bin$model == "revised"  & result_df_single_bin$target == "4 Wk Ahead" ,]$prob )
+
+
+plot_df_for_single_bin<-data.frame(y=c(d1,d2,d3,d4,d5,d6,d7,d8),target=c("1 Wk Ahead","1 Wk Ahead","2 Wk Ahead","2 Wk Ahead","3 Wk Ahead","3 Wk Ahead","4 Wk Ahead","4 Wk Ahead"),Scoring=rep(c("Multi Bin","Single Bin"),4))
+
+
+p7 <- ggplot(plot_df_for_single_bin,aes(x=target,y=y,col=Scoring)) + geom_point()  + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+unrevised_data <- readRDS("../data/flu_data_with_backfill.rds")
+levels(unrevised_data$region) <- c("National",paste0("HHS ",1:10))
+example_hhs <- "HHS 2"
+unrevised_data_2015 <- unrevised_data[unrevised_data$region == example_hhs &unrevised_data$epiweek >= 201540 & unrevised_data$epiweek <= 201619 & unrevised_data$issue <= 201619 ,]  %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag))
+
+revised_data_2015 <- unrevised_data[unrevised_data$region == example_hhs &unrevised_data$epiweek >= 201540 & unrevised_data$epiweek <= 201619 ,]  %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag))
+
+result_df_season_onset$week <- unlist(lapply(result_df_season_onset$epiweek,function(x){
+  return (year_week_to_season_week(as.numeric(substr(x,5,7)),as.numeric(substr(x,1,4))))
+}))
+
+
+p5 <- ggplot(result_df_season_onset[result_df_season_onset$year ==2015 & (result_df_season_onset$model == "sampling" |result_df_season_onset$model == "revised" |result_df_season_onset$model == "unrevised"),],aes(x=week,y=prob,col=region)) + geom_point() + facet_grid(~model) + theme_bw()
+
+unrevised_data_2015$epiweek <- as.factor(unrevised_data_2015$epiweek)
+
+p6 <- ggplot(unrevised_data_2015,aes(x=epiweek,y=wili))+ geom_point()+geom_point(data=revised_data_2015,aes(x=as.factor(epiweek),y=wili),color='cornflowerblue') + geom_hline(aes(yintercept=get_onset_baseline(example_hhs,"2015/2016")),alpha=.5,linetype="dashed")  + theme(axis.text.x = element_text(angle = 90, hjust = 1,size=8))
+
+
+
+
+plot_grid(
+           p6 ,
+           p7,
+           labels = c("A", "B")
+           )
+#legend <- get_legend( p4)
+
+
+
+```
+
+
+
+
+
+
+
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+library(lme4)
+download_backfill_data <- function(){
+  library(plyr) # for rbind.fill
+  library(dplyr)
+  source("https://raw.githubusercontent.com/cmu-delphi/delphi-epidata/master/src/client/delphi_epidata.R")
+  
+  # Fetch data
+  all_obs <- lapply(c("AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"),
+                    function(region_val) {
+                      lapply(0:51,
+                             function(lag_val) {
+                               obs_one_lag <- Epidata$fluview(
+                                 regions = list(region_val),
+                                 epiweeks = list(Epidata$range(199901, 201911)),
+                                 lag = list(lag_val))
+                               
+                               lapply(obs_one_lag$epidata,
+                                      function(x) {
+                                        x[sapply(x, function(comp) is.null(comp))] <- NA
+                                        return(as.data.frame(x))
+                                      }) %>%
+                                 rbind.fill()
+                             }) %>%
+                        rbind.fill()
+                    }) %>%
+    rbind.fill()
+  
+  saveRDS(all_obs,
+          file = "flu_data_with_backfill_state.rds")
+  
+  
+}
+
+#download_backfill_data()  
+```
+
+```{r state-flu-sampling,echo=FALSE,warning=FALSE,message=FALSE}
+data <- readRDS("flu_data_with_backfill_state.rds")
+lag_df <- read.csv("lag_df_state")
+lag_df$prov <- as.numeric(lag_df$prov)
+
+
+library(sarimaTD)
+
+library(forecast)
+
+
+
+
+fully_observed_data <- data %>% group_by(region,epiweek) %>%
+
+        filter(lag == max(lag)) %>% arrange(epiweek)
+
+mse_matrix_state_seasonal <- matrix(NA,nrow=49*22,ncol=6)
+matrix_row_idx <- 1
+for (region in c("al","ak","az","ar","ca","co","ct","de","ga","hi","id","il","in","ia","ks","ky","la","me","md","ma","mi","mn","ms","mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok","or","pa","ri","sc","sd","tn","tx","ut","vt","va","wa","wv","wi","wy")){
+  for (date in c(paste0(2018,41:52),paste0(2019,"0",1:9))){
+      available_data <-  data[data$region == region & data$issue <= date,] %>% group_by(region,epiweek) %>%  filter(lag == max(lag)) %>% arrange(epiweek)
+      available_ili <- available_data$wili
+      
+      num_weeks_into_season <- ifelse(as.numeric(substr(date,5,7)) >= 40,as.numeric(substr(date,5,7))-40 ,as.numeric(substr(date,5,7)) + 12)
+      
+      sarima_fit_available <-  fit_sarima(
+            y = available_ili,
+            ts_frequency = 52,
+            transformation = "box-cox",
+            seasonal_difference = TRUE)
+      
+      sarima_fit_adjusted <-  fit_sarima(
+            y = available_ili,
+            ts_frequency = 52,
+            transformation = "box-cox",
+            seasonal_difference = TRUE)
+      
+      sarima_fit_perfect <-  fit_sarima(
+            y = available_ili,
+            ts_frequency = 52,
+            transformation = "box-cox",
+            seasonal_difference = TRUE)
+      
+      sampled_trajectories_available <-
+          simulate(
+            object = sarima_fit_available,
+            nsim = 1000,
+            seed = 1,
+            newdata =available_ili,
+            h = max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4)
+          )
+          
+      
+      sampled_trajectories_adjusted <- matrix(NA,nrow=1000,ncol=max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4))
+      
+      
+      for (idx in 1:1000){
+        sampled_trajectories_adjusted[idx,] <-
+          simulate(
+            object = sarima_fit_adjusted,
+            nsim = 1,
+            newdata = c(head(available_ili,length(available_ili)-num_weeks_into_season),
+                        tail(available_ili,num_weeks_into_season)+rnorm(num_weeks_into_season,0,.1)),
+            h =max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4)
+          )
+      }
+      
+      
+     
+          
+      
+      sampled_trajectories_perfect <-
+          simulate(
+            object = sarima_fit_adjusted,
+            nsim = 1000,
+            seed = 1,
+            newdata =fully_observed_data[fully_observed_data$region == region & fully_observed_data$epiweek <= date,]$ili,
+            h = max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4)
+          )
+      
+        
+               
+               available_and_sampled <- cbind(matrix(rep(tail(available_ili,num_weeks_into_season),1000),ncol=num_weeks_into_season,byrow = T),sampled_trajectories_available)
+               
+               adjusted_and_sampled <- cbind(matrix(rep(tail(available_ili,num_weeks_into_season),1000),ncol=num_weeks_into_season,byrow = T),sampled_trajectories_adjusted)
+               
+               perfect_and_sampled <- cbind(matrix(rep(tail(fully_observed_data[fully_observed_data$region == region & fully_observed_data$epiweek <= date,]$ili,num_weeks_into_season),1000),ncol=num_weeks_into_season,byrow = T),sampled_trajectories_perfect)
+               
+               
+               true_peak_week_percentage <-max(fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek >= "201841",]$wili)
+      true_peak_week <- which.max(fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek >= "201841",]$wili)
+               
+             res_local <-c(sum(apply(available_and_sampled,1,max) <= true_peak_week_percentage + .5 &apply(available_and_sampled,1,max) >= true_peak_week_percentage - .5  )/1000,
+               sum(apply(adjusted_and_sampled,1,max) <= true_peak_week_percentage + .5 &apply(adjusted_and_sampled,1,max) >= true_peak_week_percentage - .5  )/1000,
+               sum(apply(perfect_and_sampled,1,max) <= true_peak_week_percentage + .5 &apply(perfect_and_sampled,1,max) >= true_peak_week_percentage - .5  )/1000,
+               
+               sum(apply(available_and_sampled,1,which.max) <= true_peak_week + 1 &apply(available_and_sampled,1,which.max) >= true_peak_week - 1 )/1000,
+               sum(apply(adjusted_and_sampled,1,which.max)<= true_peak_week + 1 &apply(adjusted_and_sampled,1,which.max) >= true_peak_week - 1  )/1000,
+               sum(apply(perfect_and_sampled,1,which.max) <= true_peak_week + 1 &apply(perfect_and_sampled,1,which.max) >= true_peak_week -1)/1000)
+               
+               
+               
+            mse_matrix_state_seasonal[matrix_row_idx ,]  <-res_local
+            
+            matrix_row_idx <- matrix_row_idx + 1
+  }
+}
+
+```
+
+```{r mean-adjustment-state-level state-flu-bias,echo=FALSE,warning=FALSE,message=FALSE}
+require(splines)
+library(dplyr)
+data <- readRDS("flu_data_with_backfill_state.rds")
+lag_df <- read.csv("lag_df_state")
+lag_df$prov <- as.numeric(lag_df$prov)
+
+
+
+
+
+
+
+
+library(sarimaTD)
+
+library(forecast)
+
+
+
+data <- readRDS("flu_data_with_backfill_state.rds")
+
+fully_observed_data <- data %>% group_by(region,epiweek) %>%
+
+        filter(lag == max(lag)) %>% arrange(epiweek)
+
+
+### MEAN MODEL
+mean_model <- lmer(L0~0 + (1+bs(season_week) + prov | Region ),data=lag_df)
+
+mean_model1 <- lmer(L1~0 + (1+bs(season_week)| Region ),data=lag_df)
+
+mean_model2 <- lmer(L2~0 + (1+bs(season_week)| Region ),data=lag_df)
+
+mean_model3 <- lmer(L3~0 + (1+bs(season_week)| Region ),data=lag_df)
+
+mse_matrix_state <- matrix(NA,nrow=49*22,ncol=22)
+matrix_row_idx <- 1
+for (region in c("al","ak","az","ar","ca","co","ct","de","ga","hi","id","il","in","ia","ks","ky","la","me","md","ma","mi","mn","ms","mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok","or","pa","ri","sc","sd","tn","tx","ut","vt","va","wa","wv","wi","wy")){
+  for (date in c(paste0(2018,41:52),paste0(2019,"0",1:9))){
+      available_data <-  data[data$region == region & data$issue <= date,] %>% group_by(region,epiweek) %>%  filter(lag == max(lag)) %>% arrange(epiweek)
+      available_ili <- available_data$wili
+      
+      predicted_adjustment <- predict(mean_model,newdata=data.frame(season_week = as.numeric(substr(date,5,7)),Region=region,prov=tail(available_data$num_providers,1)))
+      
+      predicted_adjustment_1<- predict(mean_model1,newdata=data.frame(season_week = as.numeric(substr(date,5,7)),Region=region))
+      
+      predicted_adjustment_2<- predict(mean_model2,newdata=data.frame(season_week = as.numeric(substr(date,5,7)),Region=region))
+      
+      predicted_adjustment_3<- predict(mean_model2,newdata=data.frame(season_week = as.numeric(substr(date,5,7)),Region=region))
+  
+      adjusted_data <- available_ili
+      
+      adjusted_data[length(adjusted_data)]<- adjusted_data[length(adjusted_data)]-predicted_adjustment
+      adjusted_data[length(adjusted_data)-1]<- adjusted_data[length(adjusted_data)-1]-.75*predicted_adjustment_1
+      adjusted_data[length(adjusted_data)-2]<- adjusted_data[length(adjusted_data)-2]-.25*predicted_adjustment_2
+      
+      adjusted_data[length(adjusted_data)-3]<- adjusted_data[length(adjusted_data)-3]-.1*predicted_adjustment_3
+      
+      
+      mse_null <- sum((available_ili-fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek <= date,]$wili)^2)
+      
+      mse_adjusted <- sum((adjusted_data-fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek <= date,]$wili)^2)
+      
+     
+      
+      
+      
+      ##NOW FOR SARIMA STUFF
+      
+      sarima_fit_available <-  fit_sarima(
+            y = available_ili,
+            ts_frequency = 52,
+            transformation = "box-cox",
+            seasonal_difference = TRUE)
+      
+      sarima_fit_adjusted <-  fit_sarima(
+            y = adjusted_data,
+            ts_frequency = 52,
+            transformation = "box-cox",
+            seasonal_difference = TRUE)
+      
+      sampled_trajectories_available <-
+          simulate(
+            object = sarima_fit_available,
+            nsim = 1000,
+            seed = 1,
+            newdata =available_ili,
+            h = max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4)
+          )
+          
+      
+      sampled_trajectories_adjusted <-
+          simulate(
+            object = sarima_fit_adjusted,
+            nsim = 1000,
+            seed = 1,
+            newdata =adjusted_data,
+            h =max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4)
+          )
+          
+      
+      sampled_trajectories_perfect <-
+          simulate(
+            object = sarima_fit_adjusted,
+            nsim = 1000,
+            seed = 1,
+            newdata =fully_observed_data[fully_observed_data$region == region & fully_observed_data$epiweek <= date,]$ili,
+            h = max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4)
+          )
+      
+      
+      true_1_steap_ahead <- fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == move_k_week_ahead(date,1),]$wili
+      
+      true_2_steap_ahead <- fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == move_k_week_ahead(date,2),]$wili
+      
+      
+      true_3_steap_ahead <- fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == move_k_week_ahead(date,3),]$wili
+      
+      true_4_steap_ahead <- fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == move_k_week_ahead(date,4),]$wili
+      
+      true_peak_week_percentage <-max(fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == "201911",]$wili)
+      true_peak_week <- which.max(fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == "201911",]$wili)
+      
+       num_weeks_into_season <- ifelse(as.numeric(substr(date,5,7)) >= 40,as.numeric(substr(date,5,7))-40 ,as.numeric(substr(date,5,7)) + 12)
+               
+               available_and_sampled <- cbind(matrix(rep(tail(available_ili,num_weeks_into_season),1000),ncol=num_weeks_into_season,byrow = T),sampled_trajectories_available)
+               
+               adjusted_and_sampled <- cbind(matrix(rep(tail(available_ili,num_weeks_into_season),1000),ncol=num_weeks_into_season,byrow = T),sampled_trajectories_adjusted)
+               
+               perfect_and_sampled <- cbind(matrix(rep(tail(available_ili,num_weeks_into_season),1000),ncol=num_weeks_into_season,byrow = T),sampled_trajectories_perfect)
+      
+       mse_matrix_state[matrix_row_idx,]<- c(date,region,mse_null,mse_adjusted,
+               sum(sampled_trajectories_available[,1] <= true_1_steap_ahead + .01 &sampled_trajectories_available[,1] >= true_1_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_adjusted[,1] <= true_1_steap_ahead + .01 &sampled_trajectories_adjusted[,1] >= true_1_steap_ahead - .01  )/1000,
+                sum(sampled_trajectories_perfect[,1] <= true_1_steap_ahead + .01 &sampled_trajectories_perfect[,1] >= true_1_steap_ahead - .01  )/1000,
+               
+               sum(sampled_trajectories_available[,2] <= true_2_steap_ahead + .01 &sampled_trajectories_available[,2] >= true_2_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_adjusted[,2] <= true_2_steap_ahead + .01 &sampled_trajectories_adjusted[,2] >= true_2_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_perfect[,2] <= true_2_steap_ahead + .01 &sampled_trajectories_perfect[,2] >= true_2_steap_ahead - .01  )/1000,
+               
+               sum(sampled_trajectories_available[,3] <= true_3_steap_ahead + .01 &sampled_trajectories_available[,3] >= true_3_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_adjusted[,3] <= true_3_steap_ahead + .01 &sampled_trajectories_adjusted[,3] >= true_3_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_perfect[,3] <= true_3_steap_ahead + .01 &sampled_trajectories_perfect[,3] >= true_3_steap_ahead - .01  )/1000,
+               
+               sum(sampled_trajectories_available[,4] <= true_4_steap_ahead + .01 &sampled_trajectories_available[,4] >= true_4_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_adjusted[,4] <= true_4_steap_ahead + .01 &sampled_trajectories_adjusted[,4] >= true_4_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_perfect[,4] <= true_4_steap_ahead + .01 &sampled_trajectories_perfect[,4] >= true_4_steap_ahead - .01  )/1000,
+               
+              
+               
+               
+               sum(apply(available_and_sampled,1,max) <= true_peak_week_percentage + .01 &apply(available_and_sampled,1,max) >= true_peak_week_percentage - .01  )/1000,
+               sum(apply(adjusted_and_sampled,1,max) <= true_peak_week_percentage + .01 &apply(adjusted_and_sampled,1,max) >= true_peak_week_percentage - .01  )/1000,
+               sum(apply(perfect_and_sampled,1,max) <= true_peak_week_percentage + .01 &apply(perfect_and_sampled,1,max) >= true_peak_week_percentage - .01  )/1000,
+               
+               sum(apply(available_and_sampled,1,which.max) <= true_peak_week + 1 &apply(available_and_sampled,1,which.max) >= true_peak_week - 1 )/1000,
+               sum(apply(adjusted_and_sampled,1,which.max)<= true_peak_week + 1 &apply(adjusted_and_sampled,1,which.max) >= true_peak_week - 1  )/1000,
+               sum(apply(perfect_and_sampled,1,which.max) <= true_peak_week + 1 &apply(perfect_and_sampled,1,which.max) >= true_peak_week -1)/1000
+               
+               
+               
+                            )
+      matrix_row_idx<- matrix_row_idx+1
+      
+      
+  }
+}
+
+
+colnames(mse_matrix_state) <- c("date","region","null_mse","adjusted_mse","null_ls_1_ahead","adjusted_ls_1_ahead","perfect_ls_1_ahead", "null_ls_2_ahead","adjusted_ls_2_ahead","perfect_ls_2_ahead","null_ls_3_ahead","adjusted_ls_3_ahead","perfect_ls_3_ahead","null_ls_4_ahead","adjusted_ls_4_ahead","perfect_ls_4_ahead","null_ls_pw","adjusted_ls_pw","perfect_ls_pw","null_ls_pwp","adjusted_ls_pwp","perfect_ls_pwp")
+mse_matrix_state <- data.frame(mse_matrix_state)
+
+
+mse_matrix_state$null_mse <- as.numeric(as.character(mse_matrix_state$null_mse))
+
+mse_matrix_state$adjusted_mse <- as.numeric(as.character(mse_matrix_state$adjusted_mse))
+
+mse_matrix_state$null_ls_1_ahead <- as.numeric(as.character(mse_matrix_state$null_ls_1_ahead))
+mse_matrix_state$adjusted_ls_1_ahead <- as.numeric(as.character(mse_matrix_state$adjusted_ls_1_ahead))
+mse_matrix_state$null_ls_2_ahead <- as.numeric(as.character(mse_matrix_state$null_ls_2_ahead))
+mse_matrix_state$adjusted_ls_2_ahead <- as.numeric(as.character(mse_matrix_state$adjusted_ls_2_ahead))
+mse_matrix_state$null_ls_3_ahead <- as.numeric(as.character(mse_matrix_state$null_ls_3_ahead))
+mse_matrix_state$adjusted_ls_3_ahead <- as.numeric(as.character(mse_matrix_state$adjusted_ls_3_ahead))
+mse_matrix_state$null_ls_4_ahead <- as.numeric(as.character(mse_matrix_state$null_ls_4_ahead))
+mse_matrix_state$adjusted_ls_4_ahead <- as.numeric(as.character(mse_matrix_state$adjusted_ls_4_ahead))
+
+mse_by_region <- mse_matrix_state %>% dplyr::group_by(region) %>% dplyr::summarise(mse_null=sum(null_mse),mse_adjusted=sum(adjusted_mse))
+
+#mean(mse_matrix_state[mse_matrix_state$region == "ar",]$null_mse)
+#mean(mse_matrix_state[mse_matrix_state$region == "ar",]$adjusted_mse)
+#mean(mse_matrix_state$null_mse)
+#mean(mse_matrix_state$adjusted_mse)
+
+
+#mean(pmax(-10,log(mse_matrix_state$null_ls_1_ahead),na.rm=T))
+#mean(pmax(-10,log(mse_matrix_state$adjusted_ls_1_ahead),na.rm=T))
+ 
+#mean(pmax(-10,log(mse_matrix_state$null_ls_2_ahead),na.rm=T))
+#mean(pmax(-10,log(mse_matrix_state$adjusted_ls_2_ahead),na.rm=T))
+ 
+#mean(pmax(-10,log(mse_matrix_state$null_ls_3_ahead),na.rm=T))
+#mean(pmax(-10,log(mse_matrix_state$adjusted_ls_3_ahead),na.rm=T))
+ 
+#mean(pmax(-10,log(mse_matrix_state$null_ls_4_ahead),na.rm=T))
+#mean(pmax(-10,log(mse_matrix_state$adjusted_ls_4_ahead),na.rm=T))
+
+```
+
+
+
+```{r slrr,echo=FALSE,warning=FALSE,message=FALSE,fig.height=4,fig.width=4,fig.cap="\\label{fig:slrr}"}
+library(pander) 
+
+mse_matrix_state$null_ls_1_ahead <- pmax(-10,log(mse_matrix_state$null_ls_1_ahead),na.rm=T)
+mse_matrix_state$adjusted_ls_1_ahead<-pmax(-10,log(mse_matrix_state$adjusted_ls_1_ahead),na.rm=T)
+mse_matrix_state$perfect_ls_1_ahead<-pmax(-10,log(as.numeric(as.character(mse_matrix_state$perfect_ls_1_ahead))),na.rm=T)
+ 
+
+
+mse_matrix_state$null_ls_2_ahead <-pmax(-10,log(mse_matrix_state$null_ls_2_ahead),na.rm=T)
+mse_matrix_state$adjusted_ls_2_ahead <- pmax(-10,log(mse_matrix_state$adjusted_ls_2_ahead),na.rm=T)
+ mse_matrix_state$perfect_ls_2_ahead<-pmax(-10,log(as.numeric(as.character(mse_matrix_state$perfect_ls_2_ahead))),na.rm=T)
+
+mse_matrix_state$null_ls_3_ahead<-pmax(-10,log(mse_matrix_state$null_ls_3_ahead),na.rm=T)
+mse_matrix_state$adjusted_ls_3_ahead <-pmax(-10,log(mse_matrix_state$adjusted_ls_3_ahead),na.rm=T)
+ mse_matrix_state$perfect_ls_3_ahead<-pmax(-10,log(as.numeric(as.character(mse_matrix_state$perfect_ls_3_ahead))),na.rm=T)
+
+mse_matrix_state$null_ls_4_ahead <-pmax(-10,log(mse_matrix_state$null_ls_4_ahead),na.rm=T)
+mse_matrix_state$adjusted_ls_4_ahead <-pmax(-10,log(mse_matrix_state$adjusted_ls_4_ahead),na.rm=T)
+mse_matrix_state$perfect_ls_4_ahead<-pmax(-10,log(as.numeric(as.character(mse_matrix_state$perfect_ls_4_ahead))),na.rm=T)
+
+ls_r <- as.numeric(colMeans( sapply( mse_matrix_state[,,3:ncol(mse_matrix_state)], as.numeric ))[3:16])
+slr_df <- data.frame(method=c("Null","Adjusted","True","DM"),
+                     mse=c(c(ls_r[1:2],0),dm.test(mse_matrix_state$null_mse,mse_matrix_state$adjusted_mse)$p.value),
+                     sa1 = c(ls_r[3:5], dm.test(mse_matrix_state$null_ls_1_ahead,mse_matrix_state$adjusted_ls_1_ahead)$p.value),
+                     sa2=c(ls_r[6:8], dm.test(mse_matrix_state$null_ls_2_ahead,mse_matrix_state$adjusted_ls_2_ahead)$p.value),
+                     sa3=c(ls_r[9:11],dm.test(mse_matrix_state$null_ls_3_ahead,mse_matrix_state$adjusted_ls_3_ahead)$p.value),
+                     sa4=c(ls_r[12:14],dm.test(mse_matrix_state$null_ls_3_ahead,mse_matrix_state$adjusted_ls_3_ahead)$p.value))
+
+colnames(slr_df) <- c("Method","MSE","Log-Score k=1","Log-Score k=2","Log-Score k=3","Log-Score k=4")
+#pander(slr_df,caption="Results for bias correction State Level")
+
+```
+
+
+
+
+
+
+```{r sld, echo=FALSE,warning=FALSE,message=FALSE,width=8,height=8,fig.cap="\\label{fig:sld}A Example of reporting delay for three states. Points are diffeences between initially observed values and finally reported values by season week. B Example of extreme reporting delay in state data, where initially reported value was well below finally revised data and denoted a large departure from the existing trend. "  }
+
+lag_df <- read.csv("lag_df_state")
+library(ggplot2)
+lag_df$season_week_indicator <- unlist(lapply(lag_df$season_week,function(x){
+  if(FALSE){
+    return (1)
+  }else if(x < 5){
+    return (1)
+  } else{
+    return (0)
+  }
+  
+}))
+p1 <-ggplot(lag_df[lag_df$Region %in% c("ma","az","ca") & lag_df$week <= 201840 & lag_df$week >= 201720,],aes(season_week,L0))+ geom_point() + facet_grid(~Region)+ xlab("Season Week of 2017/2018") + ylab("Y_{t,0} - Y_{t,infinity}")
+state_data <- readRDS("flu_data_with_backfill_state.rds") 
+
+p2 <- ggplot(state_data[state_data$region == "ca" & state_data$epiweek <= 201846 & state_data$epiweek >= 201840 & state_data$issue <= 201846,] %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag)),aes(as.factor(epiweek),ili,col='red'))+ geom_point()  +geom_point(data=state_data[state_data$region == "ca" & state_data$epiweek <= 201846 & state_data$epiweek >= 201840 ,] %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag)),aes(as.factor(epiweek),ili,col='black')) + ylim(0,10) + theme_bw() + xlab("Epiweek") + ggtitle("Available ILI vs Final ILI for CA") + ylab("ILI") + scale_colour_manual(name = 'Data', 
+         values =c('black'='black','red'='red'), labels = c('Revised','Unrevised'))
+  
+
+cowplot::plot_grid(p1,p2,ncol=1)
+```
+
+
+
+
+
+```{r,eval=FALSE,echo=FALSE}
+#lag_df_region_data <- readRDS("../data/flu_data_with_backfill.rds")
+
+create_lag_df <- function(){
+  data <- readRDS("../data/flu_data_with_backfill.rds")
+  
+  lag_df <- matrix(NA,ncol=56)
+  
+  for (region in unique(data$region)){
+    for (week in unique(data[data$region == region,]$epiweek)){
+      tmp_data <- data[data$region == region & data$epiweek == week,]
+      tmp_row <- c()
+      for (lag in seq(0,51)){
+        current_observed_data <- tmp_data[tmp_data$lag == lag,]$wili
+        finally_observed_data <- tmp_data[tmp_data$lag == max(tmp_data$lag),]$wili
+        prop <- current_observed_data-finally_observed_data
+        tmp_row <- c(tmp_row,prop)
+      }
+      while (length(tmp_row) < 52){
+        tmp_row <- c(tmp_row, NA)
+      }
+      if (length(prop) ){
+        num_prov <- ifelse(!is.na(tmp_data[tmp_data$lag==0,]$num_providers),
+                           tmp_data[tmp_data$lag==0,]$num_providers,
+                           0)
+        lag_df <- rbind(lag_df,c(region,week,tmp_row,current_observed_data,num_prov))
+      }
+    }
+  }
+  
+  lag_df <- as.data.frame(lag_df)
+  lag_df <- lag_df[2:nrow(lag_df),]
+  colnames(lag_df) <- c("Region","week",paste0("L",0:51),"Incidence","prov")
+  lag_df$season_week <- unlist(lapply(lag_df$week,function(x) {return (substr(x,5,7))}))
+  
+  write.csv(lag_df,"lag_df_region_diff")
+}
+create_lag_df()
+
+
+
+```
+
+
+
+```{r mean-adjustment-region-level state-flu-bias,echo=FALSE,warning=FALSE,message=FALSE}
+require(splines)
+library(dplyr)
+data <- readRDS("/Users/gcgibson/flu_experiments/data/flu_data_with_backfill.rds")
+lag_df <- read.csv("lag_df_region_diff")
+lag_df$prov <- as.numeric(lag_df$prov)
+
+
+
+
+
+
+
+
+library(sarimaTD)
+
+library(forecast)
+
+
+
+
+fully_observed_data <- data %>% group_by(region,epiweek) %>%
+
+        filter(lag == max(lag)) %>% arrange(epiweek)
+
+
+### MEAN MODEL
+mean_model <- lmer(L0~0 + (1+bs(season_week) + prov | Region ),data=lag_df)
+
+mean_model1 <- lmer(L1~0 + (1+bs(season_week)| Region ),data=lag_df)
+
+mean_model2 <- lmer(L2~0 + (1+bs(season_week)| Region ),data=lag_df)
+
+mean_model3 <- lmer(L3~0 + (1+bs(season_week)| Region ),data=lag_df)
+
+mse_matrix_state <- matrix(NA,nrow=11*42,ncol=22)
+
+
+
+
+matrix_row_idx <- 1
+for (region in c("nat",paste0("hhs",1:10))){
+  
+  sarima_fit_available <-  fit_sarima(
+            y = tail(fully_observed_data[fully_observed_data$epiweek <= 201840 & fully_observed_data$region == region,]$wili,200),
+            ts_frequency = 52,
+            transformation = "box-cox",
+            seasonal_difference = TRUE)
+      
+sarima_fit_adjusted <-  fit_sarima(
+            y = tail(fully_observed_data[fully_observed_data$epiweek <= 201840 & fully_observed_data$region == region,]$wili,200),
+            ts_frequency = 52,
+            transformation = "box-cox",
+            seasonal_difference = TRUE)
+
+  for (date in c(paste0(2017,41:52),paste0(2018,"0",1:9),
+                 paste0(2018,41:52),paste0(2019,"0",1:9))){
+      available_data <-  data[data$region == region & data$issue <= date,] %>% group_by(region,epiweek) %>%  filter(lag == max(lag)) %>% arrange(epiweek)
+      available_ili <- available_data$wili
+      
+      predicted_adjustment <- predict(mean_model,newdata=data.frame(season_week = as.numeric(substr(date,5,7)),Region=region,prov=tail(available_data$num_providers,1)))
+      
+      predicted_adjustment_1<- predict(mean_model1,newdata=data.frame(season_week = as.numeric(substr(date,5,7)),Region=region))
+      
+      predicted_adjustment_2<- predict(mean_model2,newdata=data.frame(season_week = as.numeric(substr(date,5,7)),Region=region))
+      
+      predicted_adjustment_3<- predict(mean_model2,newdata=data.frame(season_week = as.numeric(substr(date,5,7)),Region=region))
+  
+      adjusted_data <- available_ili
+      
+      adjusted_data[length(adjusted_data)]<- adjusted_data[length(adjusted_data)]-predicted_adjustment
+      adjusted_data[length(adjusted_data)-1]<- adjusted_data[length(adjusted_data)-1]-.75*predicted_adjustment_1
+      adjusted_data[length(adjusted_data)-2]<- adjusted_data[length(adjusted_data)-2]-.25*predicted_adjustment_2
+      
+      adjusted_data[length(adjusted_data)-3]<- adjusted_data[length(adjusted_data)-3]-.1*predicted_adjustment_3
+      
+      
+      mse_null <- sum((available_ili-fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek <= date,]$wili)^2)
+      
+      mse_adjusted <- sum((adjusted_data-fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek <= date,]$wili)^2)
+      
+     
+      
+      
+      
+      ##NOW FOR SARIMA STUFF
+      
+
+      
+      sampled_trajectories_available <-
+          simulate(
+            object = sarima_fit_available,
+            nsim = 1000,
+            seed = 1,
+            newdata =available_ili,
+            h = max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4)
+          )
+          
+      
+      sampled_trajectories_adjusted <-
+          simulate(
+            object = sarima_fit_adjusted,
+            nsim = 1000,
+            seed = 1,
+            newdata =adjusted_data,
+            h =max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4)
+          )
+          
+      
+      sampled_trajectories_perfect <-
+          simulate(
+            object = sarima_fit_adjusted,
+            nsim = 1000,
+            seed = 1,
+            newdata =fully_observed_data[fully_observed_data$region == region & fully_observed_data$epiweek <= date,]$ili,
+            h = max(ifelse(as.numeric(substr(date,5,7)) > 11,
+          11+52-as.numeric(substr(date,5,7))                ,11-as.numeric(substr(date,5,7))),4)
+          )
+      
+      
+      true_1_steap_ahead <- fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == move_k_week_ahead(date,1),]$wili
+      
+      true_2_steap_ahead <- fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == move_k_week_ahead(date,2),]$wili
+      
+      
+      true_3_steap_ahead <- fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == move_k_week_ahead(date,3),]$wili
+      
+      true_4_steap_ahead <- fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == move_k_week_ahead(date,4),]$wili
+      
+      true_peak_week_percentage <-max(fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == "201911",]$wili)
+      true_peak_week <- which.max(fully_observed_data[fully_observed_data$region==region & fully_observed_data$epiweek == "201911",]$wili)
+      
+       num_weeks_into_season <- ifelse(as.numeric(substr(date,5,7)) >= 40,as.numeric(substr(date,5,7))-40 ,as.numeric(substr(date,5,7)) + 12)
+               
+               available_and_sampled <- cbind(matrix(rep(tail(available_ili,num_weeks_into_season),1000),ncol=num_weeks_into_season,byrow = T),sampled_trajectories_available)
+               
+               adjusted_and_sampled <- cbind(matrix(rep(tail(available_ili,num_weeks_into_season),1000),ncol=num_weeks_into_season,byrow = T),sampled_trajectories_adjusted)
+               
+               perfect_and_sampled <- cbind(matrix(rep(tail(available_ili,num_weeks_into_season),1000),ncol=num_weeks_into_season,byrow = T),sampled_trajectories_perfect)
+      
+       mse_matrix_state[matrix_row_idx,]<- c(date,region,mse_null,mse_adjusted,
+               sum(sampled_trajectories_available[,1] <= true_1_steap_ahead + .01 &sampled_trajectories_available[,1] >= true_1_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_adjusted[,1] <= true_1_steap_ahead + .01 &sampled_trajectories_adjusted[,1] >= true_1_steap_ahead - .01  )/1000,
+                sum(sampled_trajectories_perfect[,1] <= true_1_steap_ahead + .01 &sampled_trajectories_perfect[,1] >= true_1_steap_ahead - .01  )/1000,
+               
+               sum(sampled_trajectories_available[,2] <= true_2_steap_ahead + .01 &sampled_trajectories_available[,2] >= true_2_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_adjusted[,2] <= true_2_steap_ahead + .01 &sampled_trajectories_adjusted[,2] >= true_2_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_perfect[,2] <= true_2_steap_ahead + .01 &sampled_trajectories_perfect[,2] >= true_2_steap_ahead - .01  )/1000,
+               
+               sum(sampled_trajectories_available[,3] <= true_3_steap_ahead + .01 &sampled_trajectories_available[,3] >= true_3_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_adjusted[,3] <= true_3_steap_ahead + .01 &sampled_trajectories_adjusted[,3] >= true_3_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_perfect[,3] <= true_3_steap_ahead + .01 &sampled_trajectories_perfect[,3] >= true_3_steap_ahead - .01  )/1000,
+               
+               sum(sampled_trajectories_available[,4] <= true_4_steap_ahead + .01 &sampled_trajectories_available[,4] >= true_4_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_adjusted[,4] <= true_4_steap_ahead + .01 &sampled_trajectories_adjusted[,4] >= true_4_steap_ahead - .01  )/1000,
+               sum(sampled_trajectories_perfect[,4] <= true_4_steap_ahead + .01 &sampled_trajectories_perfect[,4] >= true_4_steap_ahead - .01  )/1000,
+               
+              
+               
+               
+               sum(apply(available_and_sampled,1,max) <= true_peak_week_percentage + .01 &apply(available_and_sampled,1,max) >= true_peak_week_percentage - .01  )/1000,
+               sum(apply(adjusted_and_sampled,1,max) <= true_peak_week_percentage + .01 &apply(adjusted_and_sampled,1,max) >= true_peak_week_percentage - .01  )/1000,
+               sum(apply(perfect_and_sampled,1,max) <= true_peak_week_percentage + .01 &apply(perfect_and_sampled,1,max) >= true_peak_week_percentage - .01  )/1000,
+               
+               sum(apply(available_and_sampled,1,which.max) <= true_peak_week + 1 &apply(available_and_sampled,1,which.max) >= true_peak_week - 1 )/1000,
+               sum(apply(adjusted_and_sampled,1,which.max)<= true_peak_week + 1 &apply(adjusted_and_sampled,1,which.max) >= true_peak_week - 1  )/1000,
+               sum(apply(perfect_and_sampled,1,which.max) <= true_peak_week + 1 &apply(perfect_and_sampled,1,which.max) >= true_peak_week -1)/1000
+               
+               
+               
+                            )
+      matrix_row_idx<- matrix_row_idx+1
+      
+      
+  }
+}
+
+
+colnames(mse_matrix_state) <- c("date","region","null_mse","adjusted_mse","null_ls_1_ahead","adjusted_ls_1_ahead","perfect_ls_1_ahead", "null_ls_2_ahead","adjusted_ls_2_ahead","perfect_ls_2_ahead","null_ls_3_ahead","adjusted_ls_3_ahead","perfect_ls_3_ahead","null_ls_4_ahead","adjusted_ls_4_ahead","perfect_ls_4_ahead","null_ls_pw","adjusted_ls_pw","perfect_ls_pw","null_ls_pwp","adjusted_ls_pwp","perfect_ls_pwp")
+mse_matrix_state <- data.frame(mse_matrix_state)
+
+
+mse_matrix_state$null_mse <- as.numeric(as.character(mse_matrix_state$null_mse))
+
+mse_matrix_state$adjusted_mse <- as.numeric(as.character(mse_matrix_state$adjusted_mse))
+
+mse_matrix_state$null_ls_1_ahead <- as.numeric(as.character(mse_matrix_state$null_ls_1_ahead))
+mse_matrix_state$adjusted_ls_1_ahead <- as.numeric(as.character(mse_matrix_state$adjusted_ls_1_ahead))
+mse_matrix_state$null_ls_2_ahead <- as.numeric(as.character(mse_matrix_state$null_ls_2_ahead))
+mse_matrix_state$adjusted_ls_2_ahead <- as.numeric(as.character(mse_matrix_state$adjusted_ls_2_ahead))
+mse_matrix_state$null_ls_3_ahead <- as.numeric(as.character(mse_matrix_state$null_ls_3_ahead))
+mse_matrix_state$adjusted_ls_3_ahead <- as.numeric(as.character(mse_matrix_state$adjusted_ls_3_ahead))
+mse_matrix_state$null_ls_4_ahead <- as.numeric(as.character(mse_matrix_state$null_ls_4_ahead))
+mse_matrix_state$adjusted_ls_4_ahead <- as.numeric(as.character(mse_matrix_state$adjusted_ls_4_ahead))
+
+mse_by_region <- mse_matrix_state %>% dplyr::group_by(region) %>% dplyr::summarise(mse_null=sum(null_mse),mse_adjusted=sum(adjusted_mse))
+
+#mean(mse_matrix_state[mse_matrix_state$region == "ar",]$null_mse)
+#mean(mse_matrix_state[mse_matrix_state$region == "ar",]$adjusted_mse)
+#mean(mse_matrix_state$null_mse)
+#mean(mse_matrix_state$adjusted_mse)
+
+
+#mean(pmax(-10,log(mse_matrix_state$null_ls_1_ahead),na.rm=T))
+#mean(pmax(-10,log(mse_matrix_state$adjusted_ls_1_ahead),na.rm=T))
+ 
+#mean(pmax(-10,log(mse_matrix_state$null_ls_2_ahead),na.rm=T))
+#mean(pmax(-10,log(mse_matrix_state$adjusted_ls_2_ahead),na.rm=T))
+ 
+#mean(pmax(-10,log(mse_matrix_state$null_ls_3_ahead),na.rm=T))
+#mean(pmax(-10,log(mse_matrix_state$adjusted_ls_3_ahead),na.rm=T))
+ 
+#mean(pmax(-10,log(mse_matrix_state$null_ls_4_ahead),na.rm=T))
+#mean(pmax(-10,log(mse_matrix_state$adjusted_ls_4_ahead),na.rm=T))
+
+```
+
+
+
+```{r dm-tests,echo=FALSE,eval=FALSE,warning=FALSE}
+
+dm.test(mse_matrix_state_seasonal[,1][!is.na(mse_matrix_state_seasonal[,1])],mse_matrix_state_seasonal[,2][!is.na(mse_matrix_state_seasonal[,2])])
+
+dm.test(mse_matrix_state_seasonal[,4][!is.na(mse_matrix_state_seasonal[,4])],mse_matrix_state_seasonal[,5][!is.na(mse_matrix_state_seasonal[,5])])
+
+dm.test(mse_matrix_state$null_ls_1_ahead,mse_matrix_state$adjusted_ls_1_ahead)
+dm.test(mse_matrix_state$null_ls_2_ahead,mse_matrix_state$adjusted_ls_2_ahead)
+dm.test(mse_matrix_state$null_ls_3_ahead,mse_matrix_state$adjusted_ls_3_ahead)
+dm.test(mse_matrix_state$null_ls_4_ahead,mse_matrix_state$adjusted_ls_4_ahead)
+
+
+dm.test(mse_matrix_regional$null_mse[!is.na(mse_matrix_regional$null_mse)],mse_matrix_regional$adjusted_mse[!is.na(mse_matrix_regional$null_mse)])
+
+
+
+
+
+
+dm.test(result_df_season_onset[result_df_season_onset$model == "unrevised",]$prob,result_df_season_onset[result_df_season_onset$model == "revised",]$prob)
+
+dm.test(result_df_peak_week_percentage[result_df_peak_week_percentage$model == "unrevised",]$prob,result_df_peak_week_percentage[result_df_peak_week_percentage$model == "revised",]$prob)
+
+dm.test(result_df_peak_week[result_df_peak_week$model == "unrevised",]$prob,result_df_peak_week[result_df_peak_week$model == "revised",]$prob)
+
+
+dm.test(mse_matrix_regional$null_ls_1_ahead[!is.na(mse_matrix_regional$null_ls_1_ahead)],mse_matrix_regional$perfect_ls_1_ahead[!is.na(mse_matrix_regional$perfect_ls_1_ahead)])
+
+common_non_na <-intersect(which(!is.na(mse_matrix_regional$null_ls_2_ahead)),
+          which(!is.na(mse_matrix_regional$adjusted_ls_2_ahead)))
+
+dm.test(mse_matrix_regional$null_ls_2_ahead[common_non_na],mse_matrix_regional$adjusted_ls_2_ahead[common_non_na])
+
+
+
+
+
+
+
+dm.test(mse_matrix_regional$null_ls_4_ahead[!is.na(mse_matrix_regional$null_ls_4_ahead)],mse_matrix_regional$adjusted_ls_4_ahead[!is.na(mse_matrix_regional$adjusted_ls_4_ahead)],h=4)
+
+```

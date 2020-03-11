@@ -1,0 +1,13 @@
+base
+dplyr
+ggplot2
+FluSight
+cowplot
+gridExtra
+MMWRweek
+reshape2
+robustbase
+matrixStats
+png
+pander
+forecast

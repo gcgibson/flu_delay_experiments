@@ -1,0 +1,366 @@
+---
+title: "Manuscript"
+author: "Graham Casey Gibson"
+date: "4/1/2019"
+output: pdf_document
+header-includes:
+ \usepackage{float}
+  \floatplacement{figure}{H}
+  
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.pos = 'h')
+knitr::opts_chunk$set(cache=TRUE)
+knitr::opts_chunk$set(fig.width=5, fig.height=5) 
+
+
+year_week_to_season_week <- function(
+  year_week,
+  year) {
+  season_week <- ifelse(
+    year_week <= 30,
+    year_week + MMWRweek::MMWRweek(MMWRweek:::start_date(year) - 1)$MMWRweek - 30,
+    year_week - 30
+  )
+  
+  return(season_week)
+}
+```
+# Introduction
+
+## Flu Forecasting
+```{r,echo=FALSE}
+data <- readRDS("./data/flu_data_with_backfill.rds")
+```
+Seasonal influenza hospitalizes over half a million people in the world every year~\cite{https://www.cdc.gov/flu/about/burden/index.html}.
+The United States alone, reported an approximate 80,000 influenza related moralities from this past 2017/2018 flu season, the virus targeting the more susceptible elderly and children~\cite{}. 
+In order to combat the flu, the CDC forecasts influenza percentages into the future, moving vaccines and resources to areas where the flu is expected to rise, hoping to attenuate an increase in hospitalization and moralities~\cite{}. Real-time forecasting of influenza suffers from the reporting revision problem, where the estimated influenza like illness (wILI) data is revised as the season progresses. This presents a problem when forecasting because existing models assume that the data used to forecast from is up to date.
+Improving influenza forecasts by accounting for revisions will directly impact forecast accuracy, and therefore the reliability and usability of forecasts to public health officials. 
+
+## Existing literature fouses on external data for nowcasting 
+Much of the current efforts are focused on using external data to improve the estimates of the unrevised data \cite{dave}. Although this has shown some benefit, the increase in accuracy is both limited and requires access to external data, which is not always available. It is also concievable that adjusting the current observed data by historical revisions may capture the true ILI better than a noisy internet based signal.  
+
+## Historical Revisions
+
+Thanks to the efforts of CMU \cite{the data source} we have historical revisions for all weeks from the 2010/2011 to 2017/2018 seasons. We use this data to model revisions to ILI up to the 2014/2015 season, and use the remainder of the seasons as a test set.
+
+## Problem statement
+
+The above questions lead to the following three problem statements 
+
+1) **Does using historical revisions to estiamte the true ILI increase forecast accuracy accross the CDC defined targets**.
+
+2) **Do the results vary by choice of revision model?**
+
+3) **Do the results vary by region and season?** In order for a method to be practical, we need to enfore some sort of lower-bound on accuracy, that is can we show that accuracy does not decrease. 
+
+
+# Methods
+
+## Surveillance Data
+
+```{r,figure1,echo=FALSE}
+library(dplyr)
+library(ggplot2)
+library(FluSight)
+current_observed_data <- data %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag))
+current_observed_data <- current_observed_data[order(current_observed_data$epiweek),]
+current_observed_data$week <- unlist(lapply(current_observed_data$epiweek,function(x){return(substr(x,5,7))}))
+current_observed_data$week <- year_week_to_season_week(as.numeric(as.character(current_observed_data$week)),2015)
+
+current_observed_data$season <- unlist(lapply(current_observed_data$epiweek,function(x){return(substr(x,1,4))}))
+ggplot(current_observed_data[current_observed_data$epiweek >= "201040",],aes(x=as.numeric(as.character(week)),y=wili,col=region))+ geom_line() + facet_wrap(~season)  +theme_bw()
+
+
+```
+
+
+```{r,echo=FALSE,include=FALSE}
+trajectory_1 <- data[data$epiweek == "201602" & data$issue <= "201640",]
+trajectory_2 <- data[data$epiweek == "201502" & data$issue <= "201540",]
+trajectory_3 <- data[data$epiweek == "201402" & data$issue <= "201440",]
+trajectory_4 <- data[data$epiweek == "201302" & data$issue <= "201340",]
+trajectory_5 <- data[data$epiweek == "201202" & data$issue <= "201240",]
+
+trajectory <- rbind(trajectory_1,trajectory_2,trajectory_3,trajectory_4,trajectory_5)
+trajectory$year <- c(rep(2016,nrow(trajectory_1)),rep(2015,nrow(trajectory_2)),rep(2014,nrow(trajectory_3)),
+                     rep(2013,nrow(trajectory_4)),rep(2012,nrow(trajectory_5)))
+ggplot(trajectory,aes(x=issue,y=wili,col=region)) + geom_line() + theme_bw() + facet_wrap(~year,scales="free") + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + ggtitle("Revisions to week 1")# + annotate(geom = "text", x = seq(201601,201652), y = -1, label = unique(data$lag), size = 2) 
+```
+```{r,echo=FALSE}
+tmp_try <- data[data$epiweek <= "201620" & data$epiweek >= "201540" ,]
+fully_observed_data <- data %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag))
+for (epiwk in unique(tmp_try$epiweek)){
+  for (rg in unique(tmp_try$region)){
+    for (l in unique(tmp_try$lag)){
+      tmp_try[tmp_try$epiweek == epiwk & tmp_try$region == rg & tmp_try$lag == l,]$wili <- tmp_try[tmp_try$epiweek == epiwk & tmp_try$region == rg & tmp_try$lag == l,]$wili/fully_observed_data[fully_observed_data$epiweek == epiwk & fully_observed_data$region == rg,]$wili
+    }
+  }
+}
+
+ggplot(tmp_try,aes(x=as.numeric(as.character(lag)),y=wili,group=as.factor(epiweek))) + geom_line(alpha=.2) +facet_wrap(~region)+ theme_bw() + 
+  geom_line(data=tmp_try[tmp_try$region == "hhs3" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "nat" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "hhs1" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "hhs2" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "hhs4" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "hhs5" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "hhs6" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "hhs7" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "hhs8" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "hhs9" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05) +
+  geom_line(data=tmp_try[tmp_try$region == "hhs10" & tmp_try$epiweek == "201601",],aes(x=lag,y=wili),col="cornflowerblue",size=1.05)
+```
+
+```{r,echo=FALSE}
+
+fully_observed_data <- data %>% group_by(region,epiweek) %>%
+        filter(lag == max(lag))
+fully_observed_data$week <- unlist(lapply(fully_observed_data$epiweek,function(x){return(substr(x,5,7))}))
+fully_observed_data$week <- year_week_to_season_week(as.numeric(as.character(fully_observed_data$week)),2015)
+
+data_sub <- data[data$epiweek >="201540" & data$epiweek <= "201620" ,]
+
+data_sub$week <- unlist(lapply(data_sub$epiweek,function(x){return(substr(x,5,7))}))
+data_sub$week <- year_week_to_season_week(as.numeric(as.character(data_sub$week)),2015)
+
+data_frame_for_lag_plot <- matrix(NA,ncol=17)
+for (i in seq(41,52)){
+     data_frame_for_lag_plot <- rbind(data_frame_for_lag_plot,as.matrix(data_sub[ data_sub$issue <= as.numeric(paste0("2015",i)),] %>% group_by(region,epiweek) %>%
+                filter(lag == max(lag))))
+}
+
+for (i in c(paste0("0",1:9),seq(10,20))){
+     data_frame_for_lag_plot <- rbind(data_frame_for_lag_plot,as.matrix(data_sub[ data_sub$issue <= as.numeric(paste0("2016",i)),] %>% group_by(region,epiweek) %>%
+                                                                          filter(lag == max(lag))))
+   }
+data_frame_for_lag_plot <- data.frame(data_frame_for_lag_plot[2:nrow(data_frame_for_lag_plot),])
+data_frame_for_lag_plot$wili <- as.numeric(as.character(data_frame_for_lag_plot$wili))
+    #annotate("text", x = c(25), y=1.8, label = c("Y_{r,s,15,7}"))
+data_frame_for_lag_plot$lag <- as.factor(as.numeric(as.character(data_frame_for_lag_plot$lag)))
+data_frame_for_lag_plot$season_week <- as.numeric(as.character(data_frame_for_lag_plot$week))
+
+ggplot(data_frame_for_lag_plot[data_frame_for_lag_plot$lag == 0 |data_frame_for_lag_plot$lag == 1 |data_frame_for_lag_plot$lag == 2 |data_frame_for_lag_plot$lag == 3 | data_frame_for_lag_plot$lag == 4 | data_frame_for_lag_plot$lag == 5 |data_frame_for_lag_plot$lag == 10 | data_frame_for_lag_plot$lag == 20 | data_frame_for_lag_plot$lag == 30,],aes(x=as.numeric(as.character(week)),y=wili,col=lag)) + geom_line(size=.5) + theme_bw() +facet_wrap(~region) +
+     geom_line(data=fully_observed_data[fully_observed_data$epiweek >=   "201540" & fully_observed_data$epiweek <= "201620",],aes(x=as.numeric(as.character(week)),y=wili,col=as.factor("Revised")),color="black",linetype="dashed") + ylab("wILI") + xlab("Season week")+ggtitle("Revisions to 2015/2016")+ theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+Since 2013, the CDC has released wILI percentages per epidemic week and invited others to submit their own predictive models of the flu.
+The CDC combines these submitted predictive models to better inform $7$ targets: $1$,$2$,$3$,$4$ week ahead wILI percentages, the onset of the flu season (defined as the week where $3$ consecutive weeks are above the baseline, the epidemic week where wILI peaks and that peak percentage~\cite{}.
+During the season the CDC updates past epidemic week wILI percentages, collecting previously unreported data from clinical sites and updating the number of positive influenza tests and patients screened.
+A predictive model that accounts, not only for the dynamics of the flu, but for revisions throughout the season, will likely be less susceptible to past wILI changes and also more accurately predict future wILI percentages.
+
+As we can see from Figure 1 the revised wILI data is highly seasonal and varies by region. Succesful models in the Flusight Network have historically takent his into account.  
+
+
+### Data revisions
+We denote the observed wILI value for a given region $r$ season $s$ and week $w$ at week $w+l$ as.
+
+$$Y_{r,s,w,l}$$
+
+Borrowing from the notation of \cite{Hohle} we denote the finally revised data as 
+$$Y_{r,s,w,\infty}$$
+
+
+where $l=\infty$ denotes the final revised value. 
+
+
+## Reporting revision ratios
+
+We use the ratio of currently reported wILI to finally observed wILI at a given region $r$, season $s$, week $w$, lag $l$ as a central concept in our model. 
+$$a_{r,s,w,l} = \frac{Y_{r,s,w,l}}{Y_{r,s,w,\infty}}$$
+
+As we can see from Figure 2, wILI values for a given ${r,s,w}$ start off anywhere from $160\%$ to $60\%$ reported, relative to their final value. Although by lag $30$ most wILI values are fully reported (ratio of 1), there is significant variability across epiweeks and regions. 
+
+
+### Mean scale up
+
+In order to estiamte the revised data $\hat{Y}_{r,s,w,\infty}$ we apply the simple estimator 
+
+$$\hat{Y}_{r,s,w,\infty} = \frac{Y_{r,s,w,l}}{\hat{a}_{r',s',w',l'}}$$
+where we model $\hat a_{r,s,w,l}$ in a variety of methods descrbied below$
+\begin{itemize}
+     
+\item $\hat a_{r,s,w,l}  = a_{\cdot,\cdot,\cdot,l}= \frac{1}{N}\sum_{r,s,w} a_{r,s,w,l} $
+%\sim N(\beta_0,\sigma^2)$
+
+
+\item $\hat a_{r,s,w,l}  = a_{\cdot,\cdot,w,l}$
+
+\item $\hat a_{r,s,w,l}  = a_{r,\cdot,\cdot,l}$
+
+\item $a_{r,s,w,l} \sim N(\alpha + \beta_w + b_r,\sigma^2), \  \Tilde{b} \sim N(0,\Sigma) $
+
+\item $\hat a_{r,s,w,l} = g(\alpha + \beta_w + \gamma_r) $
+
+\end{itemize}
+
+
+### Sampling
+Sample blue point from Fig. 4 and set 
+
+$$\hat{Y}^{i}_{r,s,w,\infty} =\frac{Y_{r,s,w,l}}{\hat{a}_{r,s,w,l}^{i}}$$
+
+for $i \in 1:1000$. Now we have an empirical distribution of the form 
+
+$$P(Y_{r,s,w,\infty} = y) = \frac{1}{1000} \sum \textbf{I}(\hat{Y}^{i}_{r,s,w,\infty} = y)$$
+
+### Applying scale ups to currently observed data
+
+In order to apply both the scale up model to all of the currently observed data within a season up to week $w$, we develop the vector notation, 
+
+$$\vec{Y}_{r,s,w} = \{Y_{r,s,1,w-1},Y_{r,s,2,w-2},...,Y_{r,s,w,0}\}$$
+
+
+We then apply both the scale up method and the sampling method to the whole trajectory of currently observed data.
+
+## Forecasting Model
+
+In order to forecast wILI across all HHS regions we use the SARIMATD method from the sarimaTD package \cite{}. We use the default options that include seasonal differencing and box-cox transformation of the underlying ili data to normality. See SARIMATD for further details. 
+
+
+## Evaluation
+
+In order to evaluate our models for revision we choose to evaluate our estimates of the revised data ($\hat{Y}_{r,s,w,\infty}$) by forecasting the targets from the augmented data.
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{|c|c|c|c|c|c|c|c|}
+    \hline
+     Region & Season & Week  & Data Used &  K-step Ahead Target & Season onset & Season peak week & Season peak percentage  \\
+     \hline
+     r & s & 1 & $Y_{r,s,1,0}$& $Y_{r,s,1+k,\infty}$ & $w \ s.t. Y_{r,s,w,\infty} \geq \text{onset}$& $argmax_{w} Y_{r,s,w,\infty} $ & $max_{w} Y_{r,s,w,\infty} $\\
+     \hline
+     r & s & 2 & $Y_{r,s,1:2,1:0}$& $Y_{r,s,2+k,\infty}$ & $w \ s.t. Y_{r,s,w,\infty} \geq \text{onset}$& $argmax_{w} Y_{r,s,w,\infty} $ & $max_{w} Y_{r,s,w,\infty} $\\
+     \hline
+     ...&...&...&...&...&...&...&...\\
+     \hline
+     r & s & 20 & $Y_{r,s,1:20,19:0}$& $Y_{r,s,20+k,\infty}$ & $w \ s.t. Y_{r,s,w,\infty} \geq \text{onset}$& $argmax_{w} Y_{r,s,w,\infty} $ & $max_{w} Y_{r,s,w,\infty} $\\
+     \hline
+    \end{tabular}
+    \caption{Forecast template  for year $t$}
+    \label{tab:my_label}
+\end{table}
+
+
+
+# Results
+
+
+
+
+```{r,echo=FALSE}
+result_df_season_onset<- readRDS("./result_objects/season_onset_result_df")
+result_df_peak_week_percentage <- readRDS("./result_objects/peak_week_percentage_result_df")
+result_df_peak_week <- readRDS("./result_objects/peak_week_result_df")
+result_df_wk_ahead <- readRDS("./result_objects/wk_ahead_result_df")
+result_df_wk_ahead_2 <- readRDS("./result_objects/wk_ahead_2_result_df")
+result_df_wk_ahead_3 <- readRDS("./result_objects/wk_ahead_3_result_df")
+result_df_wk_ahead_4 <- readRDS("./result_objects/wk_ahead_4_result_df")
+
+result_df <- rbind(result_df_season_onset,result_df_peak_week_percentage,result_df_peak_week,result_df_wk_ahead,result_df_wk_ahead_2,result_df_wk_ahead_3,result_df_wk_ahead_4)
+
+result_df$target <- c(rep("Season onset",nrow(result_df_season_onset)),
+                      rep("Peak Week Percentage",nrow(result_df_peak_week_percentage)),
+                      rep("Peak Week",nrow(result_df_peak_week)),
+                      rep("1 Wk Ahead",nrow(result_df_wk_ahead)),
+                      rep("2 Wk Ahead",nrow(result_df_wk_ahead)),
+                      rep("3 Wk Ahead",nrow(result_df_wk_ahead)),
+                      rep("4 Wk Ahead",nrow(result_df_wk_ahead))
+                      )
+library(ggplot2)
+ggplot(result_df,aes(x=target,y=prob,col=model)) + stat_summary(fun.y="mean",geom="point") + theme_bw() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + ylab("Log Score")
+
+
+ggplot(result_df,aes(x=target,y=prob,col=model)) + stat_summary(fun.y="mean",geom="point") + theme_bw() + facet_wrap(~year) +theme(axis.text.x = element_text(angle = 90, hjust = 1)) + ylab("Log Score")
+
+ 
+
+```
+
+
+
+## 1-4 Week Ahead is largely unaffected 
+```{r,echo=FALSE}
+lag_df <- read.csv("./data/lag_df")
+rr <- c()
+for (row in 1:nrow(result_df_wk_ahead)){
+  tmp <- lag_df[lag_df$week == result_df_wk_ahead[row,]$epiweek & lag_df$Region == result_df_wk_ahead[row,]$region,]$L0
+  if (length(tmp) > 0){
+    rr <- c(rr,tmp)
+  }else{
+    rr <- c(rr,NA)
+  }
+  
+
+}
+result_df_wk_ahead$rr <- rr
+
+
+ggplot(result_df_wk_ahead[result_df_wk_ahead$model == "sampling" & result_df_wk_ahead$region == "nat",],aes(x=rr,y=prob)) + geom_point()  + theme_bw() + ylab("Log Score") + xlab("Reporting Ratio")
+
+```
+
+
+
+
+## Seasonal targets are mostly improved by sampling
+
+
+```{r,echo=FALSE}
+
+
+result_df_season_onset$week <- unlist(lapply(result_df_season_onset$epiweek,function(x){
+  return (year_week_to_season_week(as.numeric(substr(x,5,7)),as.numeric(substr(x,1,4))))
+}))
+ggplot(result_df_season_onset[result_df_season_onset$year ==2015 & (result_df_season_onset$model == "sampling" |result_df_season_onset$model == "revised" |result_df_season_onset$model == "unrevised"),],aes(x=week,y=prob,col=region)) + geom_point() + facet_grid(~model) + theme_bw()
+
+```
+## High Regional variability
+```{r,echo=FALSE}
+ggplot(result_df,aes(x=target,y=prob,col=model)) + stat_summary(fun.y="mean",geom="point") + theme_bw() + facet_wrap(~region) +theme(axis.text.x = element_text(angle = 90, hjust = 1)) + ylab("Log Score")
+```
+
+# Conclusion
+
+
+
+
+
+
+# Ref
+
+@article{osthus2019even,
+  title={Even a good influenza forecasting model can benefit from internet-based nowcasts, but those benefits are limited},
+  author={Osthus, Dave and Daughton, Ashlynn R and Priedhorsky, Reid},
+  journal={PLoS computational biology},
+  volume={15},
+  number={2},
+  pages={e1006599},
+  year={2019},
+  publisher={Public Library of Science}
+}
+
+
+@article{ray2017infectious,
+  title={Infectious disease prediction with kernel conditional density estimation},
+  author={Ray, Evan L and Sakrejda, Krzysztof and Lauer, Stephen A and Johansson, Michael A and Reich, Nicholas G},
+  journal={Statistics in medicine},
+  volume={36},
+  number={30},
+  pages={4908--4929},
+  year={2017},
+  publisher={Wiley Online Library}
+}
+
+
+@article{
+  title={https://github.com/reichlab/sarimaTD}
+}
+
+

@@ -1,0 +1,106 @@
+\begin{thebibliography}{10}
+
+\bibitem{lafond2016global}
+Lafond Kathryn~E, Nair Harish, Rasooly Mohammad~Hafiz, et al. Global role and
+  burden of influenza in pediatric respiratory hospitalizations, 1982--2012: a
+  systematic analysis.  {\it PLoS medicine. }2016;13(3):e1001977.
+
+\bibitem{skowronski2018early}
+Skowronski Danuta~M, Chambers Catharine, De~Serres Gaston, et al. Early season
+  co-circulation of influenza A (H3N2) and B (Yamagata): interim estimates of
+  2017/18 vaccine effectiveness, Canada, January 2018.  {\it Eurosurveillance.
+  }2018;23(5).
+
+\bibitem{mylius2008optimal}
+Mylius Sido~D, Hagenaars Thomas~J, Lugn{\'e}r Anna~K, Wallinga Jacco. Optimal
+  allocation of pandemic influenza vaccine depends on age, risk and timing.
+  {\it Vaccine. }2008;26(29-30):3742--3749.
+
+\bibitem{chretien2015advancing}
+Chretien Jean-Paul, Swedlow David, Eckstrand Irene, et al. Advancing epidemic
+  prediction and forecasting: a new US government initiative.  {\it Online
+  journal of public health informatics. }2015;7(1).
+
+\bibitem{cdc}
+;.
+
+\bibitem{kandula2018evaluation}
+Kandula Sasikiran, Yamana Teresa, Pei Sen, Yang Wan, Morita Haruka, Shaman
+  Jeffrey. Evaluation of mechanistic and statistical methods in forecasting
+  influenza-like illness.  {\it Journal of The Royal Society Interface.
+  }2018;15(144):20180174.
+
+\bibitem{biggerstaff2018results}
+Biggerstaff Matthew, Johansson Michael, Alper David, et al. Results from the
+  second year of a collaborative effort to forecast influenza seasons in the
+  United States.  {\it Epidemics. }2018;24:26--33.
+
+\bibitem{dugas2013Influenza}
+Dugas Andrea~Freyer, Jalalpour Mehdi, Gel Yulia, et al. Influenza forecasting
+  with Google flu trends.  {\it PloS one. }2013;8(2):e56176.
+
+\bibitem{araz2014using}
+Araz Ozgur~M, Bentley Dan, Muelleman Robert~L. Using Google Flu Trends data in
+  forecasting influenza-like--illness related ED visits in Omaha, Nebraska.
+  {\it The American journal of emergency medicine. }2014;32(9):1016--1023.
+
+\bibitem{volkova2017forecasting}
+Volkova Svitlana, Ayton Ellyn, Porterfield Katherine, Corley Courtney~D.
+  Forecasting influenza-like illness dynamics for military populations using
+  neural networks and social media.  {\it PloS one. }2017;12(12):e0188941.
+
+\bibitem{reich2019collaborative}
+Reich Nicholas~G, McGowan Craig~J, Yamana Teresa~K, et al. A Collaborative
+  Multi-Model Ensemble for Real-Time Influenza Season Forecasting in the US.
+  {\it bioRxiv. }2019;:566604.
+
+\bibitem{lawless1994adjustments}
+Lawless JF. Adjustments for reporting delays and the prediction of occurred but
+  not reported events.  {\it Canadian Journal of Statistics.
+  }1994;22(1):15--31.
+
+\bibitem{lampos}
+Lampos Vasileios, Miller Andrew~C., Crossan Steve, Stefansen Christian.
+  Advances in nowcasting influenza-like illness rates using search query logs.
+  {\it Scientific Reports. }2015;5:12760 EP -.
+
+\bibitem{johansson2014nowcasting}
+Johansson Michael~A, Powers Ann~M, Pesik Nicki, Cohen Nicole~J, Staples J~Erin.
+  Nowcasting the spread of chikungunya virus in the Americas.  {\it PloS one.
+  }2014;9(8):e104915.
+
+\bibitem{kalbfleisch1989inference}
+Kalbfleisch JD, Lawless Jerald~F. Inference based on retrospective
+  ascertainment: an analysis of the data on transfusion-related AIDS.  {\it
+  Journal of the American Statistical Association. }1989;84(406):360--372.
+
+\bibitem{hohle2014bayesian}
+H{\"o}hle Michael, Heiden Matthias. Bayesian nowcasting during the STEC O104:
+  H4 outbreak in Germany, 2011.  {\it Biometrics. }2014;70(4):993--1002.
+
+\bibitem{nunes2013nowcasting}
+Nunes Baltazar, Nat{\'a}rio Isabel, Luc{\'\i}lia~Carvalho M. Nowcasting
+  influenza epidemics using non-homogeneous hidden Markov models.  {\it
+  Statistics in medicine. }2013;32(15):2643--2660.
+
+\bibitem{stoner2019multivariate}
+Stoner Oliver, Economou Theo. Multivariate Hierarchical Frameworks for
+  Modelling Delayed Reporting in Count Data.  {\it arXiv preprint
+  arXiv:1904.03397. }2019;.
+
+\bibitem{osthus2019even}
+Osthus Dave, Daughton Ashlynn~R, Priedhorsky Reid. Even a good influenza
+  forecasting model can benefit from internet-based nowcasts, but those
+  benefits are limited.  {\it PLoS computational biology. }2019;15(2):e1006599.
+
+\bibitem{cdc_flusight}
+{\it Influenza (Flu). } 2018.
+
+\bibitem{sarimaTD}
+https://github.com/reichlab/sarimaTD. ;.
+
+\bibitem{diebold2002comparing}
+Diebold Francis~X, Mariano Robert~S. Comparing predictive accuracy.  {\it
+  Journal of Business \& economic statistics. }2002;20(1):134--144.
+
+\end{thebibliography}
